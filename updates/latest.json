@@ -1,7 +1,7 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "releasedAt": "2026-11-25",
-  "notes": "Edge TTS認証更新、ウェイクワード登録、HUD固定・拡大表示、音声しきい値の自動調整、更新先追加、アイコン修正",
-  "installer": "JARVIS_0.2.0_x64-setup.exe",
+  "notes": "Rustls暗号プロバイダーの選択を修正し、TLS利用時のpanicを防止",
+  "installer": "JARVIS_0.2.1_x64-setup.exe",
   "url": ""
 }

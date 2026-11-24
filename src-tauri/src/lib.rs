@@ -97,6 +97,15 @@ fn install_panic_logger() {
     }));
 }
 
+fn install_tls_crypto_provider() {
+    if rustls::crypto::ring::default_provider()
+        .install_default()
+        .is_err()
+    {
+        log_message("INFO", "tls", "Rustls CryptoProvider was already installed");
+    }
+}
+
 fn read_version_file(dir: &Path) -> Option<String> {
     std::fs::read_to_string(dir.join("version.txt"))
         .ok()
@@ -206,6 +215,7 @@ fn register_shortcuts(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_logger();
+    install_tls_crypto_provider();
 
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -321,5 +331,16 @@ pub fn run() {
 
     if let Err(error) = result {
         log_message("ERROR", "startup", &error.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tls_crypto_provider_is_installed() {
+        install_tls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
     }
 }
