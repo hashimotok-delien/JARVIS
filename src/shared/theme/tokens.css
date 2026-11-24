@@ -1,0 +1,30 @@
+:root {
+  color-scheme: dark;
+
+  --bg-base: #06090f;
+  --bg-panel: #0d131c;
+  --bg-elevated: #121a26;
+  --bg-hover: #18222f;
+
+  --border-subtle: #1b2534;
+  --border-strong: #263447;
+
+  --accent: #00e5ff;
+  --accent-bright: #7cf9ff;
+  --accent-dim: #0a4a55;
+  --warn: #fbbf24;
+  --error: #ff5c5c;
+  --ok: #34d399;
+
+  --text-primary: #e6f1ff;
+  --text-secondary: #8fa3b8;
+  --text-muted: #586b80;
+
+  --font-ui: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI",
+    sans-serif;
+  --font-mono: "Cascadia Code", Consolas, monospace;
+
+  --radius: 10px;
+  --glow-accent: 0 0 12px rgba(0, 229, 255, 0.45);
+  --shadow-panel: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
