@@ -763,7 +763,9 @@ export default function SettingsDialog({
                   }
                   className="shrink-0 rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
                 >
-                  {recordingWake ? "録音中..." : "呼びかけを登録"}
+                  {recordingWake
+                    ? "録音中..."
+                    : `呼びかけを録音 (${draft.stt.wakeSamples.length}/5)`}
                 </button>
               </div>
               {draft.stt.wakeSamples.length > 0 && (

@@ -5,6 +5,37 @@ use crate::events::{self, VoiceState};
 use crate::models::Settings;
 use crate::state::AppState;
 
+#[cfg(windows)]
+fn send_hud_to_back(hud: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
+
+    let hwnd = hud
+        .hwnd()
+        .map_err(|error| format!("HUDのウィンドウハンドルを取得できません: {error}"))?;
+    let result = unsafe {
+        SetWindowPos(
+            hwnd.0,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        )
+    };
+    if result == 0 {
+        return Err("HUDを最背面に移動できません".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn send_hud_to_back(_hud: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -123,6 +154,9 @@ pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
             if let Err(error) = hud.show() {
                 crate::log_message("ERROR", "window", &format!("show pinned HUD: {error}"));
             }
+            if let Err(error) = send_hud_to_back(&hud) {
+                crate::log_message("ERROR", "window", &format!("send HUD to back: {error}"));
+            }
         }
     }
 }
@@ -146,6 +180,7 @@ pub fn set_hud_priority(app: AppHandle, foreground: bool) -> Result<(), String> 
     } else {
         hud.set_always_on_top(false)
             .map_err(|error| format!("HUDを背面にできません: {error}"))?;
+        send_hud_to_back(&hud)?;
     }
     Ok(())
 }
