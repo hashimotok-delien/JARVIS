@@ -39,12 +39,71 @@ ollama serve
 
 ### 3. whisper.cpp（音声入力）
 
-`src-tauri/binaries/` に次の2ファイルを置くか、設定画面でパスを指定します。
+whisper.cpp はソースコードだけでは音声入力に使えません。JARVIS には
+`whisper-cli.exe` と Whisper モデル（`.bin`）の両方が必要です。
 
-- `whisper-cli.exe`（[Releases](https://github.com/ggml-org/whisper.cpp/releases)）
-- `ggml-small.bin`（`ggml-base.bin` / `ggml-medium.bin` も自動検出）
+#### A. whisper-cli.exe を用意する
 
-未配置の場合、音声入力はエラーを表示して無効のまま動作します。
+GitHub の [Releases](https://github.com/ggml-org/whisper.cpp/releases)
+に Windows 用の実行ファイルが添付されていない場合は、手元のソースから
+ビルドしてください。たとえば
+`C:\MyProgram\whisper.cpp-1.9.6` にソースを展開済みの場合:
+
+1. Visual Studio 2022 または Visual Studio 2022 Build Tools をインストールし、
+   **「C++ によるデスクトップ開発」**を選択します。
+2. CMake をインストールします。インストーラで PATH に追加します。
+3. **Developer PowerShell for VS 2022** を開き、次を実行します。
+   `CC=clang` など別のコンパイラ設定や、以前の失敗した CMake キャッシュを
+   避けるため、MSVC 用の新しいビルドフォルダを使います。
+
+   ```powershell
+   Set-Location 'C:\MyProgram\whisper.cpp-1.9.6'
+   Remove-Item Env:CC,Env:CXX -ErrorAction SilentlyContinue
+   cmake -S . -B build-msvc -G 'Visual Studio 17 2022' -A x64
+   cmake --build build-msvc --config Release --parallel
+   ```
+
+4. 生成された実行ファイルを探します。Visual Studio の構成によって
+   出力先が異なるため、次のコマンドで実際のパスを確認してください。
+
+   ```powershell
+   Get-ChildItem .\build-msvc -Filter whisper-cli.exe -Recurse |
+     Select-Object -ExpandProperty FullName
+   ```
+
+   `CMAKE_C_COMPILER` に関するエラーが続く場合は、
+   **Developer PowerShell for VS 2022** で実行しているか、
+   Visual Studio Installer で「C++ によるデスクトップ開発」が入っているか
+   確認してください。`build-msvc` を以前に別コンパイラで作成していた場合は、
+   そのフォルダを削除してから上記の configure コマンドをやり直してください。
+
+#### B. 日本語モデルをダウンロードする
+
+ソースフォルダにあるモデル取得スクリプトを使います。
+
+```powershell
+Set-Location 'C:\MyProgram\whisper.cpp-1.9.6'
+.\models\download-ggml-model.cmd small
+```
+
+成功すると通常は
+`C:\MyProgram\whisper.cpp-1.9.6\models\ggml-small.bin` が作成されます。
+`small` は多言語モデルで、日本語の文字起こしに使えます（ダウンロード
+サイズは約466 MiB）。英語専用の `small.en` は選ばないでください。
+`for-tests-ggml-small.bin` はテスト用の空ファイルなので使用できません。
+
+#### C. JARVIS にファイルの場所を設定する
+
+1. JARVIS を起動し、歯車アイコンから設定を開きます。
+2. **音声入力（STT / whisper.cpp）**で「音声入力」を有効にします。
+3. 「whisper-cli.exe」に、手順 A で確認した exe のフルパスを入力します。
+4. 「ggml モデル」に次のモデルファイルのフルパスを入力します。
+   `C:\MyProgram\whisper.cpp-1.9.6\models\ggml-small.bin`
+5. 設定を保存し、音声入力を試します。
+
+exe とモデルを `src-tauri/binaries/` に配置する方法もありますが、
+設定画面でフルパスを指定する方法が確実です。未設定またはファイルが
+見つからない場合、音声入力は利用できず、設定画面に検出状態が表示されます。
 
 ## 開発
 
