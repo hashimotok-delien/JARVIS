@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# whisper.cpp sidecar / models stay local (large binaries)
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# local release artifacts
+updates/*.exe
+
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

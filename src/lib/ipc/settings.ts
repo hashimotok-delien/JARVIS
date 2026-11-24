@@ -1,0 +1,76 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  ProviderCheck,
+  Settings,
+  SettingsPayload,
+} from "../../shared/types";
+import { isTauri } from "./app";
+
+export const DEFAULT_SETTINGS: SettingsPayload = {
+  providers: {
+    order: ["gemini", "ollama"],
+    geminiModel: "gemini-2.5-flash",
+    geminiBaseUrl:
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    ollamaModel: "qwen2.5:7b-instruct",
+    ollamaBaseUrl: "http://127.0.0.1:11434",
+  },
+  systemPrompt: "",
+  temperature: 0.7,
+  maxHistory: 24,
+  tts: {
+    enabled: true,
+    engine: "edge",
+    voice: "ja-JP-NanamiNeural",
+    sapiVoice: "",
+    rate: 0,
+    volume: 100,
+  },
+  stt: {
+    enabled: true,
+    language: "ja",
+    whisperPath: "",
+    modelPath: "",
+    silenceMs: 800,
+    threshold: 0.02,
+    handsFree: false,
+    followUpMs: 12000,
+  },
+  hud: { clickThrough: false, opacity: 1 },
+  startMinimized: false,
+  hasGeminiKey: false,
+  sttAvailable: false,
+  sttDetail: "バックエンド未接続",
+  dbPath: "",
+  dataDir: "",
+  previousVersion: null,
+};
+
+export async function getSettings(): Promise<SettingsPayload> {
+  if (!isTauri) return DEFAULT_SETTINGS;
+  return invoke<SettingsPayload>("get_settings");
+}
+
+export async function saveSettings(
+  settings: Settings,
+): Promise<SettingsPayload> {
+  if (!isTauri) return { ...DEFAULT_SETTINGS, ...settings };
+  return invoke<SettingsPayload>("save_settings", { settings });
+}
+
+export async function setGeminiKey(
+  key: string | null,
+): Promise<SettingsPayload> {
+  if (!isTauri) return DEFAULT_SETTINGS;
+  return invoke<SettingsPayload>("set_gemini_key", { key });
+}
+
+export async function testProviders(): Promise<ProviderCheck[]> {
+  if (!isTauri) return [];
+  return invoke<ProviderCheck[]>("test_providers");
+}
+
+export async function toggleMute(): Promise<boolean> {
+  if (!isTauri) return false;
+  return invoke<boolean>("toggle_mute");
+}

@@ -27,3 +27,18 @@ export async function toggleHud(): Promise<boolean> {
     return false;
   }
 }
+
+export async function setHudVisible(visible: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_hud_visible", { visible });
+}
+
+export async function requestVoiceToggle(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("request_voice_toggle");
+}
+
+export async function showMainWindow(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("show_main_window");
+}

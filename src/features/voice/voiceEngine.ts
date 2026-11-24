@@ -1,0 +1,353 @@
+import { useSyncExternalStore } from "react";
+import { chatStore, type ChatSnapshot } from "../chat/chatStore";
+import { settingsStore } from "../settings/settingsStore";
+import { MicRecorder } from "./recorder";
+import { TtsPlayer } from "./tts";
+import { reportVoiceState, transcribe } from "../../lib/ipc/voice";
+import { VOICE_TOGGLE, onEvent } from "../../lib/ipc/events";
+import type { HudState } from "../../shared/types";
+
+const TERMINATORS = new Set(["。", "！", "？", "!", "?", "\n"]);
+const CLOSERS = new Set(["」", "』", "）", ")", '"', "”"]);
+const WAKE_WORD = "J.A.R.V.I.S.（ジャーヴィス）いるか？";
+const WAKE_WORD_VARIANTS = [
+  normalizeWakeText(WAKE_WORD),
+  "jarvisいるか",
+  "ジャーヴィスいるか",
+  "ジャービスいるか",
+];
+
+function normalizeWakeText(text: string): string {
+  return text.toLowerCase().replace(/[\s.,!?。！？、・（）()「」『』]/g, "");
+}
+
+function removeWakeWord(text: string): string | null {
+  const normalized = normalizeWakeText(text);
+  const variant = WAKE_WORD_VARIANTS.find((item) =>
+    normalized.includes(item),
+  );
+  if (!variant) return null;
+
+  const wakePattern =
+    /J\s*\.?\s*A\s*\.?\s*R\s*\.?\s*V\s*\.?\s*I\s*\.?\s*S\s*\.?\s*(?:（?\s*ジャーヴィス\s*）?)?\s*いるか[?？]?|ジャーヴィスいるか[?？]?|ジャービスいるか[?？]?/i;
+  return text.replace(wakePattern, "").trim();
+}
+
+function cleanForSpeech(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .trim();
+}
+
+function extractSentences(text: string): {
+  sentences: string[];
+  consumed: number;
+} {
+  const sentences: string[] = [];
+  let start = 0;
+
+  for (let i = 0; i < text.length; i += 1) {
+    if (!TERMINATORS.has(text[i])) continue;
+    let end = i + 1;
+    while (end < text.length && CLOSERS.has(text[end])) end += 1;
+    const sentence = cleanForSpeech(text.slice(start, end));
+    if (sentence) sentences.push(sentence);
+    start = end;
+    i = end - 1;
+  }
+
+  return { sentences, consumed: start };
+}
+
+type Listener = () => void;
+
+class VoiceEngine {
+  private recorder = new MicRecorder();
+  private tts = new TtsPlayer();
+  private status: HudState = "idle";
+  private listeners = new Set<Listener>();
+  private initialized = false;
+  private loopTimer: number | null = null;
+  private resumeTimer: number | null = null;
+  private listenStartedAt = 0;
+  private speechDetected = false;
+  private silenceStartedAt: number | null = null;
+  private inflight = false;
+  private lastAssistantId: string | null = null;
+  private spokenChars = 0;
+  private handsFreeActiveUntil = 0;
+
+  lastError: string | null = null;
+  lastTranscript = "";
+
+  subscribe = (listener: Listener) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  getStatus = (): HudState => this.status;
+
+  async init() {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    await settingsStore.init();
+    chatStore.subscribe(() => this.onChatChange());
+    await onEvent<string>(VOICE_TOGGLE, () => {
+      void this.toggle();
+    });
+
+    this.tts.onStart = () => this.setStatus("speaking");
+    this.tts.onIdle = () => {
+      if (this.status === "speaking") {
+        this.setStatus("idle");
+      }
+      this.scheduleHandsFree();
+    };
+
+    if (settingsStore.get()?.stt.handsFree) {
+      window.setTimeout(() => {
+        if (this.status === "idle") void this.startListening();
+      }, 1200);
+    }
+  }
+
+  async toggle() {
+    this.lastError = null;
+
+    if (this.status === "listening") {
+      await this.finishListening(true);
+      return;
+    }
+    if (this.status === "thinking") {
+      return;
+    }
+    if (this.status === "speaking") {
+      this.tts.stop();
+      this.setStatus("idle");
+      this.scheduleHandsFree();
+      return;
+    }
+
+    await this.startListening();
+  }
+
+  private setStatus(next: HudState, detail?: string | null) {
+    const changed = this.status !== next;
+    this.status = next;
+    if (changed) {
+      this.listeners.forEach((listener) => listener());
+    }
+    void reportVoiceState(next, detail ?? null);
+  }
+
+  private async startListening() {
+    if (this.status !== "idle") return;
+    const settings = settingsStore.get();
+    if (!settings) return;
+
+    if (!settings.stt.enabled) {
+      this.setStatus("idle", "音声入力は無効です");
+      return;
+    }
+
+    try {
+      await this.recorder.start();
+    } catch (error) {
+      this.lastError = String(error);
+      this.setStatus("idle", this.lastError);
+      this.listeners.forEach((listener) => listener());
+      return;
+    }
+
+    this.clearResume();
+    this.speechDetected = false;
+    this.silenceStartedAt = null;
+    this.listenStartedAt = performance.now();
+    this.setStatus("listening");
+    this.loopTimer = window.setInterval(() => this.tick(), 60);
+  }
+
+  private tick() {
+    if (this.status !== "listening") return;
+    const settings = settingsStore.get();
+    if (!settings) return;
+
+    const level = this.recorder.level();
+    if (level >= settings.stt.threshold) {
+      this.speechDetected = true;
+      this.silenceStartedAt = null;
+    } else if (this.speechDetected) {
+      if (this.silenceStartedAt === null) {
+        this.silenceStartedAt = performance.now();
+      } else if (
+        performance.now() - this.silenceStartedAt >=
+        settings.stt.silenceMs
+      ) {
+        void this.finishListening(false);
+        return;
+      }
+    }
+
+    if (performance.now() - this.listenStartedAt >= 20_000) {
+      void this.finishListening(false);
+    }
+  }
+
+  private async finishListening(userStop: boolean) {
+    if (this.status !== "listening" || this.inflight) return;
+    this.stopLoop();
+    this.inflight = true;
+
+    const recorded = await this.recorder.stop();
+    const tooShort =
+      !recorded ||
+      recorded.durationMs < 400 ||
+      (!this.speechDetected && !userStop);
+
+    if (tooShort) {
+      this.inflight = false;
+      this.setStatus("idle");
+      this.scheduleHandsFree();
+      return;
+    }
+
+    this.setStatus("thinking");
+    try {
+      const text = (await transcribe(recorded.base64)).trim();
+      if (!text) {
+        this.setStatus("idle");
+        this.scheduleHandsFree();
+        return;
+      }
+      const settings = settingsStore.get();
+      let message = text;
+      if (settings?.stt.handsFree) {
+        const wakeRemainder = removeWakeWord(text);
+        const isActive = performance.now() < this.handsFreeActiveUntil;
+        if (wakeRemainder === null && !isActive) {
+          this.setStatus("idle");
+          this.scheduleHandsFree();
+          return;
+        }
+        if (wakeRemainder !== null) {
+          this.handsFreeActiveUntil =
+            performance.now() + settings.stt.followUpMs;
+          message = wakeRemainder;
+        } else {
+          this.handsFreeActiveUntil =
+            performance.now() + settings.stt.followUpMs;
+        }
+        if (!message) {
+          this.setStatus("idle");
+          this.scheduleHandsFree();
+          return;
+        }
+      }
+
+      this.lastTranscript = message;
+      await chatStore.send(message);
+    } catch (error) {
+      this.lastError =
+        error instanceof Error ? error.message : String(error);
+      this.setStatus("idle", this.lastError);
+      this.listeners.forEach((listener) => listener());
+      this.scheduleHandsFree();
+    } finally {
+      this.inflight = false;
+    }
+  }
+
+  private onChatChange() {
+    const snapshot = chatStore.getSnapshot();
+    this.pumpTts(snapshot);
+
+    if (!snapshot.streaming && this.status === "thinking" && !this.tts.busy) {
+      this.setStatus("idle");
+      this.scheduleHandsFree();
+    }
+  }
+
+  private pumpTts(snapshot: ChatSnapshot) {
+    const settings = settingsStore.get();
+    if (!settings?.tts.enabled) return;
+
+    const assistant = [...snapshot.messages]
+      .reverse()
+      .find((message) => message.role === "assistant");
+    if (!assistant) return;
+
+    if (assistant.id !== this.lastAssistantId) {
+      this.lastAssistantId = assistant.id;
+      this.spokenChars = 0;
+    }
+
+    if (assistant.content.length <= this.spokenChars) return;
+
+    const fresh = assistant.content.slice(this.spokenChars);
+    const { sentences, consumed } = extractSentences(fresh);
+    sentences.forEach((sentence) => this.tts.enqueue(sentence));
+    this.spokenChars += consumed;
+
+    const finished = !snapshot.streaming && !assistant.pending;
+    if (finished && consumed < fresh.length) {
+      const rest = cleanForSpeech(fresh.slice(consumed));
+      if (rest) this.tts.enqueue(rest);
+      this.spokenChars += fresh.length - consumed;
+    }
+  }
+
+  private scheduleHandsFree() {
+    const settings = settingsStore.get();
+    if (!settings?.stt.handsFree) return;
+    if (this.status !== "idle") return;
+
+    this.clearResume();
+    this.resumeTimer = window.setTimeout(() => {
+      this.resumeTimer = null;
+      if (
+        this.status === "idle" &&
+        settingsStore.get()?.stt.handsFree
+      ) {
+        void this.startListening();
+      }
+    }, 500);
+  }
+
+  private clearResume() {
+    if (this.resumeTimer !== null) {
+      window.clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
+  }
+
+  private stopLoop() {
+    if (this.loopTimer !== null) {
+      window.clearInterval(this.loopTimer);
+      this.loopTimer = null;
+    }
+  }
+
+  stopSpeaking() {
+    this.tts.stop();
+    if (this.status === "speaking") {
+      this.setStatus("idle");
+    }
+  }
+}
+
+export const voiceEngine = new VoiceEngine();
+
+export function useVoiceStatus(): HudState {
+  return useSyncExternalStore(
+    voiceEngine.subscribe,
+    voiceEngine.getStatus,
+  );
+}
