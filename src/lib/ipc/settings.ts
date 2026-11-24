@@ -76,6 +76,11 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     hudPreset: "custom",
     clipboardWatch: false,
   },
+  updates: {
+    folder: "",
+    watch: true,
+    pollSeconds: 60,
+  },
   hasGeminiKey: false,
   sttAvailable: false,
   sttDetail: "バックエンド未接続",

@@ -320,6 +320,27 @@ impl Default for UiSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct UpdateSettings {
+    /// Folder watched for `latest.json` and its installer.
+    pub folder: String,
+    /// Re-check the folder while the app runs.
+    pub watch: bool,
+    /// Seconds between automatic checks.
+    pub poll_seconds: u32,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            folder: String::new(),
+            watch: true,
+            poll_seconds: 60,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub providers: ProviderSettings,
     pub system_prompt: String,
@@ -333,6 +354,7 @@ pub struct Settings {
     pub tools: ToolSettings,
     pub memory: MemorySettings,
     pub ui: UiSettings,
+    pub updates: UpdateSettings,
 }
 
 impl Default for Settings {
@@ -350,6 +372,7 @@ impl Default for Settings {
             tools: ToolSettings::default(),
             memory: MemorySettings::default(),
             ui: UiSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -441,6 +464,16 @@ impl Settings {
             })
             .take(8)
             .collect();
+        self.updates.folder = self
+            .updates
+            .folder
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(512)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        self.updates.poll_seconds = self.updates.poll_seconds.clamp(15, 3600);
         self.stt.silence_ms = self.stt.silence_ms.clamp(200, 5000);
         self.stt.threshold = self.stt.threshold.clamp(0.002, 0.4);
         let mut wake_samples = Vec::new();
@@ -564,6 +597,31 @@ mod tests {
         assert_eq!(parsed.tools.mcp_servers[0].name, "fs");
         assert_eq!(parsed.memory.max_items, 20);
         assert_eq!(parsed.ui.theme, "light");
+    }
+
+    #[test]
+    fn older_settings_get_default_update_settings() {
+        let settings: Settings = serde_json::from_str(r#"{"preferredName":"ボス"}"#).unwrap();
+
+        assert!(settings.updates.folder.is_empty());
+        assert!(settings.updates.watch);
+        assert_eq!(settings.updates.poll_seconds, 60);
+    }
+
+    #[test]
+    fn settings_sanitize_update_folder_and_poll_interval() {
+        let settings = Settings {
+            updates: UpdateSettings {
+                folder: "  D:\\repo\\updates\u{7}  ".into(),
+                watch: true,
+                poll_seconds: 2,
+            },
+            ..Settings::default()
+        }
+        .sanitized();
+
+        assert_eq!(settings.updates.folder, "D:\\repo\\updates");
+        assert_eq!(settings.updates.poll_seconds, 15);
     }
 
     #[test]

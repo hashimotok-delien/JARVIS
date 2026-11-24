@@ -376,6 +376,8 @@ pub fn run() {
             commands::update::check_update,
             commands::update::launch_update_installer,
             commands::update::open_update_dir,
+            commands::dialog::pick_file,
+            commands::dialog::pick_folder,
         ])
         .setup(|app| {
             let handle = app.handle();

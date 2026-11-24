@@ -155,6 +155,12 @@ export interface UiSettings {
   clipboardWatch: boolean;
 }
 
+export interface UpdateSettings {
+  folder: string;
+  watch: boolean;
+  pollSeconds: number;
+}
+
 export interface HudSettings {
   clickThrough: boolean;
   opacity: number;
@@ -178,6 +184,7 @@ export interface Settings {
   tools: ToolSettings;
   memory: MemorySettings;
   ui: UiSettings;
+  updates: UpdateSettings;
 }
 
 export interface SettingsPayload extends Settings {

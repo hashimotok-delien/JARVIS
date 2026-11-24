@@ -103,6 +103,7 @@ export default function AppShell() {
     void chatStore.init();
     void voiceEngine.init();
     void updateStore.refresh();
+    updateStore.startWatching();
     void refreshAux();
   }, [refreshAux]);
 

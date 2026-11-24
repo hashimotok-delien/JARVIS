@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { checkUpdate } from "../../lib/ipc/update";
+import { settingsStore } from "../settings/settingsStore";
 import type { UpdateStatus } from "../../shared/types";
 
 type Listener = () => void;
@@ -8,6 +9,8 @@ class UpdateStore {
   private snapshot: UpdateStatus | null = null;
   private listeners = new Set<Listener>();
   private inflight = false;
+  private watcher: number | null = null;
+  private watching = false;
 
   subscribe = (listener: Listener) => {
     this.listeners.add(listener);
@@ -32,6 +35,32 @@ class UpdateStore {
       return status;
     } finally {
       this.inflight = false;
+    }
+  }
+
+  /** Poll the configured update folder so a new build is noticed while running. */
+  startWatching() {
+    if (this.watching) return;
+    this.watching = true;
+    settingsStore.subscribe(() => this.schedule());
+    this.schedule();
+  }
+
+  private schedule() {
+    this.clearWatcher();
+    const settings = settingsStore.get();
+    if (!settings?.updates.watch) return;
+    const seconds = Math.max(15, settings.updates.pollSeconds || 60);
+    this.watcher = window.setTimeout(() => {
+      this.watcher = null;
+      void this.refresh().finally(() => this.schedule());
+    }, seconds * 1000);
+  }
+
+  private clearWatcher() {
+    if (this.watcher !== null) {
+      window.clearTimeout(this.watcher);
+      this.watcher = null;
     }
   }
 }

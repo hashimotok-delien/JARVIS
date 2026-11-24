@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -25,10 +25,10 @@ import {
   getHudGeometry,
 } from "../../lib/ipc/assistant";
 import { logError } from "../../lib/logging";
+import { pickFile, pickFolder } from "../../lib/ipc/dialog";
 import { MicRecorder } from "../voice/recorder";
 import { voiceEngine } from "../voice/voiceEngine";
-import { transcribeWakeSample } from "../../lib/ipc/voice";
-import { normalizeWakeText } from "../voice/wakeWord";
+import WakeEnrollDialog from "../voice/WakeEnrollDialog";
 import type {
   ProviderCheck,
   ProviderId,
@@ -73,6 +73,7 @@ function toDraft(source: Settings): Settings {
     },
     memory: { ...source.memory },
     ui: { ...source.ui },
+    updates: { ...source.updates },
   };
 }
 
@@ -155,44 +156,64 @@ function Section({
   );
 }
 
-async function captureWakePhrase(threshold: number) {
-  const recorder = new MicRecorder();
-  try {
-    await recorder.start();
-    return await new Promise<{
-      audio: Awaited<ReturnType<MicRecorder["stop"]>>;
-      heardSpeech: boolean;
-    }>((resolve, reject) => {
-      const startedAt = performance.now();
-      let heardSpeech = false;
-      let silenceAt: number | null = null;
-      let finished = false;
-      const timer = window.setInterval(() => {
-        const now = performance.now();
-        if (recorder.level() >= Math.max(0.006, threshold * 0.5)) {
-          heardSpeech = true;
-          silenceAt = null;
-        } else if (heardSpeech) {
-          silenceAt ??= now;
-          if (now - silenceAt >= 600) finish();
-        }
-        if (now - startedAt >= 8000) finish();
-      }, 50);
 
-      function finish() {
-        if (finished) return;
-        finished = true;
-        window.clearInterval(timer);
-        void recorder.stop().then(
-          (audio) => resolve({ audio, heardSpeech }),
-          reject,
-        );
-      }
-    });
-  } catch (error) {
-    recorder.cancel();
-    throw error;
-  }
+function PathRow({
+  label,
+  hint,
+  value,
+  placeholder,
+  title,
+  mode,
+  filter,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  placeholder: string;
+  title: string;
+  mode: "file" | "folder";
+  filter?: string;
+  onChange: (path: string) => void;
+}) {
+  const browse = async () => {
+    const current = value.trim();
+    let initialDir: string | undefined = current || undefined;
+    if (mode === "file" && current) {
+      const cut = Math.max(
+        current.lastIndexOf("\\"),
+        current.lastIndexOf("/"),
+      );
+      initialDir = cut > 0 ? current.slice(0, cut) : undefined;
+    }
+    const picked =
+      mode === "folder"
+        ? await pickFolder({ title, initialDir })
+        : await pickFile({ title, filter, initialDir });
+    if (picked) onChange(picked);
+  };
+
+  return (
+    <Row label={label} hint={hint}>
+      <span className="flex items-center gap-1">
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          title={value}
+          className={`${INPUT_CLASS} w-[170px]`}
+        />
+        <button
+          type="button"
+          onClick={() => void browse()}
+          title={title}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-strong)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+        >
+          <FolderOpen size={10} /> 参照
+        </button>
+      </span>
+    </Row>
+  );
 }
 
 async function measureNoiseFloor(): Promise<number[]> {
@@ -234,8 +255,13 @@ export default function SettingsDialog({
   const [checks, setChecks] = useState<ProviderCheck[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [recordingWake, setRecordingWake] = useState(false);
+  const [enrolling, setEnrolling] = useState(false);
   const [calibratingThreshold, setCalibratingThreshold] = useState(false);
+  const draftRef = useRef<Settings | null>(null);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   useEffect(() => {
     if (!open) return;
@@ -302,86 +328,60 @@ export default function SettingsDialog({
     }
   };
 
-  const MAX_WAKE = 5;
-
-  /**
-   * Record `count` separate attempts. Each attempt is its own recording,
-   * and the working list keeps growing (fixes the old "always 1/5" bug).
-   */
-  const recordWakeSamples = async (count: number) => {
+  const startWakeEnrollment = () => {
     if (!settings?.sttAvailable) {
       setMessage("whisper.cpp とモデルを設定してから登録してください");
-      return;
-    }
-    if (draft.stt.wakeSamples.length >= MAX_WAKE) {
-      setMessage("登録できる呼びかけ例は5件までです");
       return;
     }
     if (!voiceEngine.pauseForEnrollment()) {
       setMessage("音声処理が終わってから登録してください");
       return;
     }
-
     setBusy(true);
-    setRecordingWake(true);
-    let samples = [...draft.stt.wakeSamples];
-    let step = 0;
-    let attempts = 0;
-    try {
-      while (step < count && samples.length < MAX_WAKE) {
-        if (attempts >= 12) {
-          setMessage("登録を中断しました。もう一度お試しください");
-          break;
-        }
-        attempts += 1;
-        const next = samples.length + 1;
-        setMessage(
-          `${next}回目: 「ジャービス」と呼びかけてください（${samples.length}/${MAX_WAKE} 登録済み）`,
-        );
-        await new Promise((resolve) => window.setTimeout(resolve, 700));
-
-        const captured = await captureWakePhrase(draft.stt.threshold);
-        if (!captured.audio || !captured.heardSpeech) {
-          setMessage(`${next}回目: 声を検出できませんでした。もう一度お試しください`);
-          continue;
-        }
-        const transcript = (
-          await transcribeWakeSample(captured.audio.base64, samples)
-        ).trim();
-        if (!transcript) {
-          setMessage(`${next}回目: 呼びかけを文字起こしできませんでした`);
-          continue;
-        }
-        if (
-          samples.some(
-            (sample) => normalizeWakeText(sample) === normalizeWakeText(transcript),
-          )
-        ) {
-          setMessage(`「${transcript}」は登録済みです。別の言い方でどうぞ`);
-          continue;
-        }
-
-        samples = [...samples, transcript].slice(0, MAX_WAKE);
-        setDraft((current) =>
-          current
-            ? { ...current, stt: { ...current.stt, wakeSamples: [...samples] } }
-            : current,
-        );
-        setMessage(`${samples.length}/${MAX_WAKE} 登録: ${transcript}`);
-        step += 1;
-      }
-    } catch (error) {
-      void logError("record_wake_sample", error);
-      setMessage(`呼びかけ例を登録できませんでした: ${String(error)}`);
-    } finally {
-      voiceEngine.resumeAfterEnrollment();
-      setBusy(false);
-      setRecordingWake(false);
-    }
+    setMessage(null);
+    const cleared: Settings = {
+      ...draft,
+      stt: { ...draft.stt, wakeSamples: [] },
+    };
+    setDraft(cleared);
+    settingsStore.save(cleared).catch((error: unknown) => {
+      void logError("clear_wake_samples", error);
+    });
+    setEnrolling(true);
   };
 
-  const recordWakeSample = () => recordWakeSamples(1);
-  const recordWakeBatch = () => recordWakeSamples(MAX_WAKE);
+  const cancelWakeEnrollment = () => {
+    setEnrolling(false);
+    voiceEngine.resumeAfterEnrollment();
+    setBusy(false);
+    setMessage("登録を中断しました");
+  };
+
+  const finishWakeEnrollment = useCallback(async (samples: string[]) => {
+    setEnrolling(false);
+    voiceEngine.resumeAfterEnrollment();
+    const base = draftRef.current;
+    if (!base) {
+      setBusy(false);
+      return;
+    }
+    const next: Settings = {
+      ...base,
+      stt: { ...base.stt, wakeSamples: samples },
+    };
+    setDraft(next);
+    try {
+      await settingsStore.save(next);
+      setMessage(
+        `呼びかけを${samples.length}回分記録しました。認識候補は保存済みです`,
+      );
+    } catch (error) {
+      void logError("save_wake_samples", error);
+      setMessage(`呼びかけの保存に失敗しました: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const autoTuneThreshold = async () => {
     if (!voiceEngine.pauseForEnrollment()) {
@@ -789,33 +789,29 @@ export default function SettingsDialog({
                 }
               />
             </Row>
-            <Row
+            <PathRow
               label="whisper-cli.exe"
               hint={settings?.sttAvailable ? "検出済み" : "未検出"}
-            >
-              <input
-                value={draft.stt.whisperPath}
-                onChange={(event) =>
-                  patch({
-                    stt: { ...draft.stt, whisperPath: event.target.value },
-                  })
-                }
-                placeholder="C:\\tools\\whisper\\whisper-cli.exe"
-                className={INPUT_CLASS}
-              />
-            </Row>
-            <Row label="ggml モデル">
-              <input
-                value={draft.stt.modelPath}
-                onChange={(event) =>
-                  patch({
-                    stt: { ...draft.stt, modelPath: event.target.value },
-                  })
-                }
-                placeholder="C:\\tools\\whisper\\ggml-small.bin"
-                className={INPUT_CLASS}
-              />
-            </Row>
+              title="whisper-cli.exe を選択"
+              mode="file"
+              filter="実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*"
+              value={draft.stt.whisperPath}
+              placeholder="C:\\tools\\whisper\\whisper-cli.exe"
+              onChange={(whisperPath) =>
+                patch({ stt: { ...draft.stt, whisperPath } })
+              }
+            />
+            <PathRow
+              label="ggml モデル"
+              title="Whisper モデル (*.bin) を選択"
+              mode="file"
+              filter="Whisper モデル (*.bin)|*.bin|すべてのファイル (*.*)|*.*"
+              value={draft.stt.modelPath}
+              placeholder="C:\\tools\\whisper\\ggml-small.bin"
+              onChange={(modelPath) =>
+                patch({ stt: { ...draft.stt, modelPath } })
+              }
+            />
             <Row label="言語">
               <input
                 value={draft.stt.language}
@@ -897,42 +893,22 @@ export default function SettingsDialog({
             </Row>
             <div className="space-y-2 border-t border-[var(--border-subtle)] pt-2">
               <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
-                「ジャービス」と呼びかける録音を1回ずつ、または5回まとめて
-                行います。録音ごとに1件ずつ登録され、音声は保存せず文字起こし
-                だけを端末内に保存します。
+                「ジャービス」と呼びかける録音を5回行い、聞き取れた言い方を
+                認識候補として保存します。音声は保存せず文字起こしだけを端末内に
+                保存します。ボタンを押すと既存の登録はすべて削除されます。
               </p>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] text-[var(--text-secondary)]">
                   登録数: {draft.stt.wakeSamples.length}/5
                 </span>
-                <span className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void recordWakeSample()}
-                    disabled={
-                      busy ||
-                      !settings?.sttAvailable ||
-                      draft.stt.wakeSamples.length >= 5
-                    }
-                    className="shrink-0 rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
-                  >
-                    {recordingWake ? "録音中..." : "1回録音"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void recordWakeBatch()}
-                    disabled={
-                      busy ||
-                      !settings?.sttAvailable ||
-                      draft.stt.wakeSamples.length >= 5
-                    }
-                    className="shrink-0 rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
-                  >
-                    {recordingWake
-                      ? "録音中..."
-                      : `5回まとめて録音 (${draft.stt.wakeSamples.length}/5)`}
-                  </button>
-                </span>
+                <button
+                  type="button"
+                  onClick={startWakeEnrollment}
+                  disabled={busy || !settings?.sttAvailable}
+                  className="shrink-0 rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                >
+                  呼びかけを登録（5回）
+                </button>
               </div>
               {draft.stt.wakeSamples.length > 0 && (
                 <ul className="space-y-1">
@@ -1457,6 +1433,46 @@ export default function SettingsDialog({
                 v{update?.currentVersion ?? "—"}
               </span>
             </Row>
+            <PathRow
+              label="更新元フォルダ"
+              hint="latest.json と exe を置いた場所"
+              title="更新元フォルダを選択"
+              mode="folder"
+              value={draft.updates.folder}
+              placeholder="D:\\リポジトリ\\updates"
+              onChange={(folder) =>
+                patch({ updates: { ...draft.updates, folder } })
+              }
+            />
+            <Row
+              label="更新元を監視"
+              hint="指定フォルダの latest.json と exe を定期確認します"
+            >
+              <Switch
+                checked={draft.updates.watch}
+                onChange={(watch) =>
+                  patch({ updates: { ...draft.updates, watch } })
+                }
+              />
+            </Row>
+            <Row label="確認間隔（秒）">
+              <input
+                type="number"
+                min="15"
+                max="3600"
+                step="15"
+                value={draft.updates.pollSeconds}
+                onChange={(event) =>
+                  patch({
+                    updates: {
+                      ...draft.updates,
+                      pollSeconds: Number(event.target.value),
+                    },
+                  })
+                }
+                className={`${INPUT_CLASS} w-[90px]`}
+              />
+            </Row>
             <Row label="最新バージョン" hint={update?.releasedAt ?? undefined}>
               <span
                 className={`text-[11px] ${
@@ -1519,9 +1535,9 @@ export default function SettingsDialog({
               </button>
             </div>
             <p className="pt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">
-              exe隣接フォルダと
-              D:\プログラミング\AI_Project\JARVIS\updates の
-              latest.json およびインストーラを確認します。
+              指定した更新元フォルダを優先して確認し、未設定なら exe 隣接フォルダと
+              D:\プログラミング\AI_Project\JARVIS\updates を確認します。
+              変更は保存後に反映されます。
             </p>
           </Section>
 
@@ -1551,6 +1567,13 @@ export default function SettingsDialog({
           </button>
         </footer>
       </div>
+      {enrolling && (
+        <WakeEnrollDialog
+          threshold={draft.stt.threshold}
+          onComplete={(samples) => void finishWakeEnrollment(samples)}
+          onCancel={cancelWakeEnrollment}
+        />
+      )}
     </div>
   );
 }

@@ -64,8 +64,8 @@ fn is_newer(latest: &str, current: &str) -> bool {
     false
 }
 
-fn find_manifest(data_dir: &Path) -> Option<PathBuf> {
-    paths::update_dir_candidates(data_dir)
+fn find_manifest(data_dir: &Path, custom: Option<&Path>) -> Option<PathBuf> {
+    paths::update_dir_candidates(data_dir, custom)
         .into_iter()
         .map(|dir| dir.join(MANIFEST_NAME))
         .find(|candidate| candidate.is_file())
@@ -98,7 +98,9 @@ fn resolve_installer(manifest_path: &Path, manifest: &UpdateManifest) -> Option<
 #[tauri::command]
 pub fn check_update(state: State<'_, AppState>) -> UpdateStatus {
     let current = current_version();
-    let manifest_path = find_manifest(&state.data_dir);
+    let settings = crate::commands::read_settings(&state);
+    let custom = PathBuf::from(settings.updates.folder.trim());
+    let manifest_path = find_manifest(&state.data_dir, Some(custom.as_path()));
 
     let Some(manifest_path) = manifest_path else {
         return UpdateStatus {
