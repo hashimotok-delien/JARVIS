@@ -72,5 +72,11 @@ pub fn emit<T>(app: &AppHandle, event: &str, payload: T)
 where
     T: Serialize + Clone,
 {
-    let _ = app.emit(event, payload);
+    if let Err(error) = app.emit(event, payload) {
+        crate::log_message(
+            "ERROR",
+            "event",
+            &format!("failed to emit {event}: {error}"),
+        );
+    }
 }

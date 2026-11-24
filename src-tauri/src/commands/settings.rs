@@ -1,17 +1,11 @@
 use serde::Serialize;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::db;
 use crate::events;
 use crate::models::{Settings, SettingsPayload};
 use crate::state::AppState;
-
-fn apply_hud(app: &AppHandle, settings: &Settings) {
-    if let Some(hud) = app.get_webview_window("hud") {
-        let _ = hud.set_ignore_cursor_events(settings.hud.click_through);
-    }
-}
 
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> SettingsPayload {
@@ -29,7 +23,7 @@ pub fn save_settings(
         let conn = crate::commands::lock_db(&state)?;
         db::save_settings(&conn, &settings)?;
     }
-    apply_hud(&app, &settings);
+    crate::commands::app::apply_hud_options(&app, &settings);
     events::emit(&app, events::SETTINGS_CHANGED, settings.clone());
     Ok(crate::commands::settings_payload(&app))
 }
@@ -45,11 +39,7 @@ pub fn set_gemini_key(
         db::set_secret(&conn, "gemini_api_key", key.as_deref())?;
     }
     let payload = crate::commands::settings_payload(&app);
-    events::emit(
-        &app,
-        events::SETTINGS_CHANGED,
-        payload.settings.clone(),
-    );
+    events::emit(&app, events::SETTINGS_CHANGED, payload.settings.clone());
     Ok(payload)
 }
 
@@ -87,10 +77,22 @@ async fn probe(
             } else {
                 let text = response.text().await.unwrap_or_default();
                 let detail: String = text.chars().take(160).collect();
+                crate::log_message(
+                    "WARN",
+                    "provider",
+                    &format!("connection test failed: {status} {detail}"),
+                );
                 (false, format!("{status} {detail}"))
             }
         }
-        Err(error) => (false, error.to_string()),
+        Err(error) => {
+            crate::log_message(
+                "ERROR",
+                "provider",
+                &format!("connection test request failed: {error}"),
+            );
+            (false, error.to_string())
+        }
     }
 }
 
@@ -111,14 +113,8 @@ pub async fn test_providers(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let gemini_url = format!(
-        "{}/chat/completions",
-        settings.providers.gemini_base_url
-    );
-    let ollama_url = format!(
-        "{}/v1/chat/completions",
-        settings.providers.ollama_base_url
-    );
+    let gemini_url = format!("{}/chat/completions", settings.providers.gemini_base_url);
+    let ollama_url = format!("{}/v1/chat/completions", settings.providers.ollama_base_url);
 
     let (gemini, ollama) = tokio::join!(
         probe(
@@ -127,12 +123,7 @@ pub async fn test_providers(
             key.as_deref(),
             &settings.providers.gemini_model
         ),
-        probe(
-            &client,
-            &ollama_url,
-            None,
-            &settings.providers.ollama_model
-        )
+        probe(&client, &ollama_url, None, &settings.providers.ollama_model)
     );
 
     let _ = app;

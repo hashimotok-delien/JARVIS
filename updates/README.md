@@ -7,12 +7,15 @@
 ## 参照される順序
 
 1. 環境変数 `JARVIS_UPDATE_DIR`
-2. `<exe と同じフォルダ>\updates`
-3. `<exe>\..\..\..\updates`（リポジトリ直下。`target/debug|release` から実行時）
-4. `<インストール先>\updates`（`usr` の親）
-5. `<データフォルダ>\updates`
+2. ビルド時のリポジトリ直下 `updates` フォルダ
+3. `<exe と同じフォルダ>\updates`
+4. `<exe>\..\..\..\updates`（開発ビルド時のリポジトリ直下）
+5. `<インストール先>\updates`（`usr` の親）
+6. `<データフォルダ>\updates`
 
 最初に見つかった `latest.json` が使われます。
+そのため、開発リポジトリの `updates\latest.json` を更新すると、
+同じPCにインストール済みのアプリでも「再確認」から更新を検出できます。
 
 ## リリース手順
 

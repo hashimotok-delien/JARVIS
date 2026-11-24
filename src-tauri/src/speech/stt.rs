@@ -81,10 +81,19 @@ pub fn resolve_model(app: &AppHandle, settings: &Settings) -> Option<PathBuf> {
     None
 }
 
-pub fn availability(
-    app: &AppHandle,
-    settings: &Settings,
-) -> (bool, String) {
+fn wake_prompt(settings: &Settings) -> String {
+    let mut phrases = vec![
+        "JARVIS".to_string(),
+        "ジャービス".to_string(),
+        "ジャーヴィス".to_string(),
+        "ジャビス".to_string(),
+        "じゃあびす".to_string(),
+    ];
+    phrases.extend(settings.stt.wake_samples.iter().cloned());
+    phrases.join(", ")
+}
+
+pub fn availability(app: &AppHandle, settings: &Settings) -> (bool, String) {
     let binary = resolve_binary(app, settings);
     let model = resolve_model(app, settings);
 
@@ -108,31 +117,24 @@ pub fn availability(
     }
 }
 
-pub fn transcribe(
-    app: &AppHandle,
-    settings: &Settings,
-    wav: &[u8],
-) -> Result<String, String> {
+pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {
     let binary = resolve_binary(app, settings).ok_or_else(|| {
         "whisper.cpp が見つかりません。設定画面で whisper-cli.exe のパスを指定してください。"
             .to_string()
     })?;
     let model = resolve_model(app, settings).ok_or_else(|| {
-        "whisper モデル（ggml-*.bin）が見つかりません。設定画面で指定してください。"
-            .to_string()
+        "whisper モデル（ggml-*.bin）が見つかりません。設定画面で指定してください。".to_string()
     })?;
 
     let work = std::env::temp_dir().join("jarvis-stt");
-    std::fs::create_dir_all(&work)
-        .map_err(|e| format!("作業ディレクトリを作成できません: {e}"))?;
+    std::fs::create_dir_all(&work).map_err(|e| format!("作業ディレクトリを作成できません: {e}"))?;
 
     let id = uuid::Uuid::new_v4().simple().to_string();
     let wav_path = work.join(format!("{id}.wav"));
     let out_base = work.join(&id);
     let txt_path = work.join(format!("{id}.txt"));
 
-    std::fs::write(&wav_path, wav)
-        .map_err(|e| format!("音声ファイルを書き込めません: {e}"))?;
+    std::fs::write(&wav_path, wav).map_err(|e| format!("音声ファイルを書き込めません: {e}"))?;
 
     let mut command = Command::new(&binary);
     command
@@ -142,6 +144,8 @@ pub fn transcribe(
         .arg(&wav_path)
         .arg("-l")
         .arg(&settings.stt.language)
+        .arg("--prompt")
+        .arg(wake_prompt(settings))
         .arg("-nt")
         .arg("-otxt")
         .arg("-of")
@@ -174,4 +178,24 @@ pub fn transcribe(
     }
 
     Ok(text.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_includes_standard_and_enrolled_wake_phrases() {
+        let settings = Settings {
+            stt: crate::models::SttSettings {
+                wake_samples: vec!["じゃあびす".into()],
+                ..crate::models::SttSettings::default()
+            },
+            ..Settings::default()
+        };
+        let prompt = wake_prompt(&settings);
+
+        assert!(prompt.contains("ジャービス"));
+        assert!(prompt.contains("じゃあびす"));
+    }
 }

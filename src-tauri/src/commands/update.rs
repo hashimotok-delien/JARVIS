@@ -72,20 +72,16 @@ fn find_manifest(data_dir: &Path) -> Option<PathBuf> {
 }
 
 fn load_manifest(path: &Path) -> Result<UpdateManifest, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("マニフェストを読めません: {e}"))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| format!("マニフェストの解析に失敗: {e}"))
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("マニフェストを読めません: {e}"))?;
+    serde_json::from_str(&raw).map_err(|e| format!("マニフェストの解析に失敗: {e}"))
 }
 
 fn current_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-fn resolve_installer(
-    manifest_path: &Path,
-    manifest: &UpdateManifest,
-) -> Option<PathBuf> {
+fn resolve_installer(manifest_path: &Path, manifest: &UpdateManifest) -> Option<PathBuf> {
     let name = manifest.installer.as_deref()?.trim();
     if name.is_empty() {
         return None;
@@ -122,8 +118,7 @@ pub fn check_update(state: State<'_, AppState>) -> UpdateStatus {
     match load_manifest(&manifest_path) {
         Ok(manifest) => {
             let latest = manifest.version.clone();
-            let has_update =
-                !latest.is_empty() && is_newer(&latest, &current);
+            let has_update = !latest.is_empty() && is_newer(&latest, &current);
             let installer = resolve_installer(&manifest_path, &manifest);
             UpdateStatus {
                 current_version: current,
@@ -131,15 +126,12 @@ pub fn check_update(state: State<'_, AppState>) -> UpdateStatus {
                 has_update,
                 notes: manifest.notes,
                 released_at: manifest.released_at,
-                installer_path: installer
-                    .map(|path| path.to_string_lossy().to_string()),
+                installer_path: installer.map(|path| path.to_string_lossy().to_string()),
                 url: manifest.url,
                 update_dir: manifest_path
                     .parent()
                     .map(|path| path.to_string_lossy().to_string()),
-                manifest_path: Some(
-                    manifest_path.to_string_lossy().to_string(),
-                ),
+                manifest_path: Some(manifest_path.to_string_lossy().to_string()),
                 error: None,
             }
         }
@@ -154,19 +146,14 @@ pub fn check_update(state: State<'_, AppState>) -> UpdateStatus {
             update_dir: manifest_path
                 .parent()
                 .map(|path| path.to_string_lossy().to_string()),
-            manifest_path: Some(
-                manifest_path.to_string_lossy().to_string(),
-            ),
+            manifest_path: Some(manifest_path.to_string_lossy().to_string()),
             error: Some(error),
         },
     }
 }
 
 #[tauri::command]
-pub fn launch_update_installer(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub fn launch_update_installer(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let status = check_update(state);
     let installer = status
         .installer_path
@@ -174,9 +161,7 @@ pub fn launch_update_installer(
         .ok_or_else(|| "インストーラが見つかりません".to_string())?;
 
     let escaped = installer.replace('\'', "''");
-    let script = format!(
-        "Start-Sleep -Milliseconds 1500; Start-Process -FilePath '{escaped}'"
-    );
+    let script = format!("Start-Sleep -Milliseconds 1500; Start-Process -FilePath '{escaped}'");
 
     std::process::Command::new("powershell.exe")
         .args([

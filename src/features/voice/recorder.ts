@@ -1,3 +1,5 @@
+import { logWarning } from "../../lib/logging";
+
 const TARGET_RATE = 16_000;
 
 export interface RecordedAudio {
@@ -186,7 +188,9 @@ export class MicRecorder {
     this.analyser?.disconnect();
     if (this.processor) this.processor.onaudioprocess = null;
     this.stream?.getTracks().forEach((track) => track.stop());
-    void this.context?.close().catch(() => undefined);
+    void this.context?.close().catch((error: unknown) =>
+      logWarning("audio_context_close", String(error)),
+    );
 
     this.processor = null;
     this.silence = null;

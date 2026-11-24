@@ -134,10 +134,7 @@ where
             };
 
             if let Some(error) = payload.get("error") {
-                return Err(StreamFailure::Http(truncate(
-                    &error.to_string(),
-                    320,
-                )));
+                return Err(StreamFailure::Http(truncate(&error.to_string(), 320)));
             }
 
             let delta = payload

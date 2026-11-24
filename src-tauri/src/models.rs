@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_SYSTEM_PROMPT: &str = concat!(
+    "あなたはJ.A.R.V.I.S.（Just A Rather Very Intelligent System）。",
+    "簡潔で落ち着いた口調の有能な執事AIです。",
+    "日本語で回答し、要点から述べてから補足します。"
+);
+const LEGACY_DEFAULT_SYSTEM_PROMPT: &str = concat!(
+    "あなたはJ.A.R.V.I.S.（Just A Rather Very Intelligent System）。",
+    "ユーザーを「ボス」と呼ぶ、簡潔で落ち着いた口調の有能な執事AIです。",
+    "日本語で回答し、要点から述べてから補足します。"
+);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -42,8 +53,7 @@ impl Default for ProviderSettings {
         Self {
             order: vec!["gemini".into(), "ollama".into()],
             gemini_model: "gemini-2.5-flash".into(),
-            gemini_base_url:
-                "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+            gemini_base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
             ollama_model: "qwen2.5:7b-instruct".into(),
             ollama_base_url: "http://127.0.0.1:11434".into(),
         }
@@ -91,6 +101,8 @@ pub struct SttSettings {
     /// RMS threshold for voice activity detection (0..1).
     pub threshold: f32,
     pub hands_free: bool,
+    /// Locally recognized wake-word variants recorded during setup.
+    pub wake_samples: Vec<String>,
     /// Seconds to keep listening for a follow-up in hands-free mode.
     pub follow_up_ms: u32,
 }
@@ -105,6 +117,7 @@ impl Default for SttSettings {
             silence_ms: 800,
             threshold: 0.02,
             hands_free: false,
+            wake_samples: Vec::new(),
             follow_up_ms: 12_000,
         }
     }
@@ -115,6 +128,11 @@ impl Default for SttSettings {
 pub struct HudSettings {
     pub click_through: bool,
     pub opacity: f32,
+    pub pinned: bool,
+    pub width: u32,
+    pub height: u32,
+    pub position_x: i32,
+    pub position_y: i32,
 }
 
 impl Default for HudSettings {
@@ -122,6 +140,11 @@ impl Default for HudSettings {
         Self {
             click_through: false,
             opacity: 1.0,
+            pinned: false,
+            width: 380,
+            height: 208,
+            position_x: 40,
+            position_y: 40,
         }
     }
 }
@@ -131,6 +154,7 @@ impl Default for HudSettings {
 pub struct Settings {
     pub providers: ProviderSettings,
     pub system_prompt: String,
+    pub preferred_name: String,
     pub temperature: f32,
     pub max_history: usize,
     pub tts: TtsSettings,
@@ -143,12 +167,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             providers: ProviderSettings::default(),
-            system_prompt: concat!(
-                "あなたはJ.A.R.V.I.S.（Just A Rather Very Intelligent System）。",
-                "ユーザーを「ボス」と呼ぶ、簡潔で落ち着いた口調の有能な執事AIです。",
-                "日本語で回答し、要点から述べてから補足します。"
-            )
-            .into(),
+            system_prompt: DEFAULT_SYSTEM_PROMPT.into(),
+            preferred_name: "ボス".into(),
             temperature: 0.7,
             max_history: 24,
             tts: TtsSettings::default(),
@@ -162,18 +182,30 @@ impl Default for Settings {
 impl Settings {
     /// Clamp every numeric field into a safe range before persisting.
     pub fn sanitized(mut self) -> Self {
+        if self.system_prompt == LEGACY_DEFAULT_SYSTEM_PROMPT {
+            self.system_prompt = DEFAULT_SYSTEM_PROMPT.into();
+        }
+        self.preferred_name = self
+            .preferred_name
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(32)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        if self.preferred_name.is_empty() {
+            self.preferred_name = "ボス".into();
+        }
         self.temperature = self.temperature.clamp(0.0, 2.0);
         self.max_history = self.max_history.clamp(2, 100);
         if self.providers.order.is_empty() {
-            self.providers.order =
-                ProviderSettings::default().order;
+            self.providers.order = ProviderSettings::default().order;
         }
-        self.providers.order.retain(|id| {
-            id == "gemini" || id == "ollama"
-        });
+        self.providers
+            .order
+            .retain(|id| id == "gemini" || id == "ollama");
         if self.providers.order.is_empty() {
-            self.providers.order =
-                ProviderSettings::default().order;
+            self.providers.order = ProviderSettings::default().order;
         }
         self.providers.gemini_base_url =
             self.providers.gemini_base_url.trim_end_matches('/').into();
@@ -186,9 +218,39 @@ impl Settings {
         self.tts.volume = self.tts.volume.clamp(0, 100);
         self.stt.silence_ms = self.stt.silence_ms.clamp(200, 5000);
         self.stt.threshold = self.stt.threshold.clamp(0.002, 0.4);
+        let mut wake_samples = Vec::new();
+        for sample in std::mem::take(&mut self.stt.wake_samples) {
+            let sample: String = sample
+                .chars()
+                .filter(|character| !character.is_control())
+                .take(48)
+                .collect::<String>()
+                .trim()
+                .to_string();
+            if !sample.is_empty()
+                && wake_samples.len() < 5
+                && !wake_samples
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(&sample))
+            {
+                wake_samples.push(sample);
+            }
+        }
+        self.stt.wake_samples = wake_samples;
         self.stt.follow_up_ms = self.stt.follow_up_ms.clamp(0, 60_000);
         self.hud.opacity = self.hud.opacity.clamp(0.2, 1.0);
+        self.hud.width = self.hud.width.clamp(380, 1920);
+        self.hud.height = self.hud.height.clamp(208, 1080);
+        self.hud.position_x = self.hud.position_x.clamp(-16_384, 16_384);
+        self.hud.position_y = self.hud.position_y.clamp(-16_384, 16_384);
         self
+    }
+
+    pub fn system_prompt_for_chat(&self) -> String {
+        format!(
+            "{}\nユーザーを「{}」とお呼びください。",
+            self.system_prompt, self.preferred_name
+        )
     }
 }
 
@@ -203,4 +265,64 @@ pub struct SettingsPayload {
     pub db_path: String,
     pub data_dir: String,
     pub previous_version: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_settings_default_the_preferred_name() {
+        let settings: Settings = serde_json::from_str(r#"{"systemPrompt":"custom"}"#).unwrap();
+
+        assert_eq!(settings.preferred_name, "ボス");
+    }
+
+    #[test]
+    fn legacy_default_prompt_uses_the_configured_name() {
+        let settings = Settings {
+            system_prompt: LEGACY_DEFAULT_SYSTEM_PROMPT.into(),
+            preferred_name: "アレックス".into(),
+            ..Settings::default()
+        }
+        .sanitized();
+
+        assert!(!settings.system_prompt.contains("ボス"));
+        assert!(
+            settings
+                .system_prompt_for_chat()
+                .ends_with("ユーザーを「アレックス」とお呼びください。")
+        );
+    }
+
+    #[test]
+    fn settings_sanitize_wake_samples_and_hud_geometry() {
+        let settings = Settings {
+            stt: SttSettings {
+                wake_samples: vec![
+                    "じゃあびす".into(),
+                    " じゃあびす ".into(),
+                    "JARVIS".into(),
+                    "ジャービス".into(),
+                    "ジャビス".into(),
+                    "呼びかけ5".into(),
+                    "呼びかけ6".into(),
+                ],
+                ..SttSettings::default()
+            },
+            hud: HudSettings {
+                width: 100,
+                height: 100,
+                position_x: 20_000,
+                ..HudSettings::default()
+            },
+            ..Settings::default()
+        }
+        .sanitized();
+
+        assert_eq!(settings.stt.wake_samples.len(), 5);
+        assert_eq!(settings.hud.width, 380);
+        assert_eq!(settings.hud.height, 208);
+        assert_eq!(settings.hud.position_x, 16_384);
+    }
 }

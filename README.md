@@ -120,7 +120,7 @@ npm run tauri build
 ```
 
 - 単体 exe: `src-tauri/target/release/jarvis.exe`
-- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.1.0_x64-setup.exe`
+- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.2.0_x64-setup.exe`
 
 ## インストール
 
@@ -140,7 +140,7 @@ JARVIS\
 ├─ usr\                # ユーザーデータ（更新・再インストールでも保持）
 │  ├─ jarvis.db        #   会話履歴・設定・APIキー（DPAPI）
 │  ├─ exports\         #   スレッドの書き出し先
-│  ├─ logs\            #   起動ログ / クラッシュログ
+│  ├─ logs\            #   jarvis.log（アプリ・音声・UIエラー）
 │  └─ version.txt      #   前回起動時のバージョン
 └─ updates\
    └─ latest.json      # ローカルのアップデート情報
@@ -149,9 +149,17 @@ JARVIS\
 `usr` の場所は環境変数 `JARVIS_DATA_DIR` でも上書きできます。
 （exe と同じ場所に書き込みできない場合は `%APPDATA%\com.monster2408.jarvis` に自動フォールバック）
 
+アプリのエラーや警告は `usr\logs\jarvis.log` に記録されます。
+`usr` に書き込めない環境では `%LOCALAPPDATA%\JARVIS\logs\jarvis.log`
+に保存されます。Edge TTS から SAPI へ切り替わった場合の理由も記録します。
+
 ## アップデート
 
-ローカルの `updates\latest.json` を見て更新を検知します（[updates/README.md](./updates/README.md)）。
+`updates\latest.json` を見て更新を検知します（[updates/README.md](./updates/README.md)）。
+実行ファイル隣接フォルダに加え、ビルド時のリポジトリにある
+`D:\プログラミング\AI_Project\JARVIS\updates` も確認します。
+このリポジトリで新しいインストーラを作成した場合、ダウンロード済みの
+アプリから設定画面の「再確認」で更新を検出できます。
 
 1. `latest.json` の `version` を新バージョンにし、`installer` にインストーラのファイル名を書く
 2. 同じフォルダにインストーラ（例: `JARVIS_0.2.0_x64-setup.exe`）を置く
@@ -159,7 +167,7 @@ JARVIS\
 4. ヘッダーに「更新 v0.2.0」が出る → 設定 → 「インストーラを起動」
 
 インストーラ起動時にアプリは自動終了し、更新後は `usr` のデータを引き継いで再起動できます。
-更新後は初回起動時に「v0.1.0 から v0.2.0 に更新されました」と通知します。
+更新後は初回起動時に前回と現在のバージョンを通知します。
 
 ## 操作
 
@@ -172,7 +180,14 @@ JARVIS\
 
 - 音声入力は VAD で無音 0.8 秒を検出すると自動で文字起こし→送信
 - 「ハンズフリー」を有効にすると、読み上げ後に自動で聞き取りを再開
+- 「ジャービス」と呼びかけると、呼び名を添えて要件を尋ね、続く発話を待つ
+- 設定画面で呼びかけ例を最大5件登録でき、文字起こし候補をローカル保存
+- VADしきい値は設定画面から周囲の音を測定して自動調整可能
+- HUDは固定位置・幅・高さを設定でき、ウェイクワード後は前面に表示
+- 起動語は whisper.cpp の文字起こし結果で判定するため、専用検出器ではありません
+- 読み上げが有効なら起動時に挨拶し、設定の「呼び名」を「〇〇様」に反映
 - 読み上げは edge-tts。失敗時は Windows SAPI に自動フォールバック
+- Edge TTS は更新された認証プロトコルを持つ edge-tts-rust を使用
 - メインウィンドウを閉じてもトレイに常駐（終了はトレイメニューから）
 - 二重起動した場合は既存ウィンドウを前面に表示（新規プロセスは起動しない）
 

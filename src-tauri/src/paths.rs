@@ -50,6 +50,13 @@ pub fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
 
 /// Log directory, resolved before the Tauri app exists (panic hook).
 pub fn log_dir() -> PathBuf {
+    if let Some(custom) = std::env::var_os("JARVIS_DATA_DIR") {
+        let path = PathBuf::from(custom);
+        if is_writable(&path) {
+            return path.join("logs");
+        }
+    }
+
     if let Some(portable) = exe_usr_dir() {
         if is_writable(&portable) {
             return portable.join("logs");
@@ -70,6 +77,12 @@ pub fn update_dir_candidates(data_dir: &Path) -> Vec<PathBuf> {
         dirs.push(PathBuf::from(custom));
     }
 
+    dirs.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("updates"),
+    );
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             dirs.push(parent.join("updates"));
@@ -89,4 +102,19 @@ pub fn update_dir_candidates(data_dir: &Path) -> Vec<PathBuf> {
     dirs.push(data_dir.join("updates"));
 
     dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_candidates_include_the_source_repository() {
+        let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("updates");
+        let candidates = update_dir_candidates(Path::new("data"));
+
+        assert!(candidates.contains(&expected));
+    }
 }

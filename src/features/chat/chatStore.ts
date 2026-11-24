@@ -19,6 +19,7 @@ import {
   onEvent,
 } from "../../lib/ipc/events";
 import { isTauri } from "../../lib/ipc/app";
+import { logError } from "../../lib/logging";
 import type {
   ChatDeltaEvent,
   ChatDoneEvent,
@@ -149,6 +150,7 @@ class ChatStore {
     });
 
     await onEvent<ChatErrorEvent>(CHAT_ERROR, (payload) => {
+      void logError("chat", payload.error);
       this.patchMessage(payload.messageId, (message) => ({
         ...message,
         content: message.content || "",
@@ -326,6 +328,7 @@ class ChatStore {
     try {
       return await exportThreadCmd(threadId, format);
     } catch (error) {
+      void logError("export_thread", error);
       this.patch({ error: String(error) });
       return null;
     }
@@ -364,6 +367,7 @@ class ChatStore {
         requestId: ack.requestId,
       });
     } catch (error) {
+      void logError("send_message", error);
       this.patch({
         streaming: false,
         requestId: null,

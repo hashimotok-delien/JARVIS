@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.1.0"
+version = "0.2.0"
 description = "J.A.R.V.I.S. - AI conversation desktop app"
 authors = ["monster2408"]
 edition = "2024"
@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
+edge-tts-rust = "0.1.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.43.0", features = ["bundled"] }
@@ -28,10 +29,8 @@ futures-util = "0.3.34"
 tokio = { version = "1.54.1", features = ["sync", "process", "time", "rt", "macros", "fs", "io-util"] }
 base64 = "0.23.1"
 uuid = { version = "1.29.3", features = ["v4"] }
-sha2 = "0.11.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 tauri-plugin-single-instance = "2.5.5"
 
 

@@ -43,8 +43,7 @@ pub fn settings_payload(app: &AppHandle) -> crate::models::SettingsPayload {
         (has_key, previous_version)
     };
 
-    let (stt_available, stt_detail) =
-        crate::speech::stt::availability(app, &settings);
+    let (stt_available, stt_detail) = crate::speech::stt::availability(app, &settings);
 
     crate::models::SettingsPayload {
         settings,

@@ -76,12 +76,13 @@ export default function AppShell() {
   return (
     <div className="flex h-full flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-4">
-        <div
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-[var(--accent-dim)]"
+        <img
+          src="/jarvis.png"
+          alt=""
+          aria-hidden="true"
+          className="h-7 w-7 rounded-md border border-[var(--accent-dim)] object-cover"
           style={{ boxShadow: "var(--glow-accent)" }}
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-        </div>
+        />
         <div className="leading-tight">
           <p className="text-sm font-semibold tracking-[0.18em]">
             J.A.R.V.I.S.
@@ -183,9 +184,10 @@ export default function AppShell() {
           onExport={(id, format) => void handleExport(id, format)}
         />
 
-        <div className="flex min-w-0 flex-1 flex-col bg-[var(--bg-base)]">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--bg-base)]">
           <ChatPane
             title={activeThread?.title ?? "新しい会話"}
+            preferredName={settings?.preferredName ?? "ボス"}
             messages={chat.messages}
             isStreaming={chat.streaming}
             provider={chat.provider}

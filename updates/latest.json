@@ -1,7 +1,7 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "releasedAt": "2026-11-25",
-  "notes": "初回リリース（P0-P3: テキストチャット / 音声入力・出力 / 常駐HUD）",
-  "installer": "",
+  "notes": "ウェイクワード登録、HUD固定・拡大表示、音声しきい値の自動調整、更新先追加、アイコン修正",
+  "installer": "JARVIS_0.2.0_x64-setup.exe",
   "url": ""
 }

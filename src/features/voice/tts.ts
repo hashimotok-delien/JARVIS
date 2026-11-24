@@ -1,4 +1,5 @@
 import { speak } from "../../lib/ipc/voice";
+import { logError } from "../../lib/logging";
 
 /**
  * Sequential TTS playback queue. Sentences are synthesized one at a time so
@@ -49,7 +50,7 @@ export class TtsPlayer {
           if (this.stopped) break;
           await this.play(payload.base64, payload.mime);
         } catch (error) {
-          console.warn("tts failed", error);
+          void logError("tts_synthesis", error);
         }
       }
     } finally {
@@ -74,8 +75,14 @@ export class TtsPlayer {
       };
 
       element.onended = finish;
-      element.onerror = finish;
-      void element.play().catch(finish);
+      element.onerror = () => {
+        void logError("tts_playback", element.error ?? "Audio playback failed");
+        finish();
+      };
+      void element.play().catch((error: unknown) => {
+        void logError("tts_playback", error);
+        finish();
+      });
     });
   }
 }

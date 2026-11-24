@@ -60,7 +60,7 @@ export default function ThreadList({
   };
 
   return (
-    <aside className="flex w-[264px] shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)]">
+    <aside className="flex min-h-0 w-[264px] shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)]">
       <div className="flex items-center gap-2 px-3 pt-3">
         <div className="relative flex-1">
           <Search
@@ -84,7 +84,7 @@ export default function ThreadList({
         </button>
       </div>
 
-      <div className="mt-2 flex-1 overflow-y-auto px-2 pb-3">
+      <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {filtered.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-[var(--text-muted)]">
             該当するスレッドがありません

@@ -15,6 +15,11 @@ import {
   launchUpdateInstaller,
   openUpdateDir,
 } from "../../lib/ipc/update";
+import { logError } from "../../lib/logging";
+import { MicRecorder } from "../voice/recorder";
+import { voiceEngine } from "../voice/voiceEngine";
+import { transcribeWakeSample } from "../../lib/ipc/voice";
+import { normalizeWakeText } from "../voice/wakeWord";
 import type {
   ProviderCheck,
   ProviderId,
@@ -42,6 +47,7 @@ function toDraft(source: Settings): Settings {
       ollamaBaseUrl: source.providers.ollamaBaseUrl,
     },
     systemPrompt: source.systemPrompt,
+    preferredName: source.preferredName,
     temperature: source.temperature,
     maxHistory: source.maxHistory,
     tts: { ...source.tts },
@@ -121,6 +127,69 @@ function Section({
   );
 }
 
+async function captureWakePhrase(threshold: number) {
+  const recorder = new MicRecorder();
+  try {
+    await recorder.start();
+    return await new Promise<{
+      audio: Awaited<ReturnType<MicRecorder["stop"]>>;
+      heardSpeech: boolean;
+    }>((resolve, reject) => {
+      const startedAt = performance.now();
+      let heardSpeech = false;
+      let silenceAt: number | null = null;
+      let finished = false;
+      const timer = window.setInterval(() => {
+        const now = performance.now();
+        if (recorder.level() >= Math.max(0.006, threshold * 0.5)) {
+          heardSpeech = true;
+          silenceAt = null;
+        } else if (heardSpeech) {
+          silenceAt ??= now;
+          if (now - silenceAt >= 600) finish();
+        }
+        if (now - startedAt >= 8000) finish();
+      }, 50);
+
+      function finish() {
+        if (finished) return;
+        finished = true;
+        window.clearInterval(timer);
+        void recorder.stop().then(
+          (audio) => resolve({ audio, heardSpeech }),
+          reject,
+        );
+      }
+    });
+  } catch (error) {
+    recorder.cancel();
+    throw error;
+  }
+}
+
+async function measureNoiseFloor(): Promise<number[]> {
+  const recorder = new MicRecorder();
+  try {
+    await recorder.start();
+    const levels: number[] = [];
+    await new Promise<void>((resolve) => {
+      const startedAt = performance.now();
+      const timer = window.setInterval(() => {
+        levels.push(recorder.level());
+        if (performance.now() - startedAt >= 2500) {
+          window.clearInterval(timer);
+          recorder.cancel();
+          resolve();
+        }
+      }, 50);
+    });
+    return levels;
+  } catch (error) {
+    recorder.cancel();
+    throw error;
+  }
+}
+
 interface SettingsDialogProps {
   open: boolean;
   onClose: () => void;
@@ -137,6 +206,8 @@ export default function SettingsDialog({
   const [checks, setChecks] = useState<ProviderCheck[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [recordingWake, setRecordingWake] = useState(false);
+  const [calibratingThreshold, setCalibratingThreshold] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -156,11 +227,18 @@ export default function SettingsDialog({
     setDraft((current) => (current ? { ...current, ...changes } : current));
 
   const save = async () => {
+    const preferredName = draft.preferredName.trim();
+    if (!preferredName) {
+      setMessage("呼び名を入力してください");
+      return;
+    }
+
     setBusy(true);
     try {
-      await settingsStore.save(draft);
+      await settingsStore.save({ ...draft, preferredName });
       setMessage("保存しました");
     } catch (error) {
+      void logError("save_settings", error);
       setMessage(`保存に失敗しました: ${String(error)}`);
     } finally {
       setBusy(false);
@@ -176,6 +254,7 @@ export default function SettingsDialog({
         apiKey.trim() ? "API キーを保存しました" : "API キーを削除しました",
       );
     } catch (error) {
+      void logError("save_gemini_key", error);
       setMessage(`API キーの保存に失敗: ${String(error)}`);
     } finally {
       setBusy(false);
@@ -188,9 +267,99 @@ export default function SettingsDialog({
     try {
       setChecks(await settingsStore.test());
     } catch (error) {
+      void logError("test_providers", error);
       setMessage(`接続テストに失敗: ${String(error)}`);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const recordWakeSample = async () => {
+    if (!settings?.sttAvailable) {
+      setMessage("whisper.cpp とモデルを設定してから登録してください");
+      return;
+    }
+    if (draft.stt.wakeSamples.length >= 5) {
+      setMessage("登録できる呼びかけ例は5件までです");
+      return;
+    }
+    if (!voiceEngine.pauseForEnrollment()) {
+      setMessage("音声処理が終わってから登録してください");
+      return;
+    }
+
+    setBusy(true);
+    setRecordingWake(true);
+    try {
+      const captured = await captureWakePhrase(draft.stt.threshold);
+      if (!captured.audio || !captured.heardSpeech) {
+        setMessage("声を検出できませんでした。もう一度お試しください");
+        return;
+      }
+      const transcript = (
+        await transcribeWakeSample(
+          captured.audio.base64,
+          draft.stt.wakeSamples,
+        )
+      ).trim();
+      if (!transcript) {
+        setMessage("呼びかけを文字起こしできませんでした");
+        return;
+      }
+      const normalized = normalizeWakeText(transcript);
+      if (
+        draft.stt.wakeSamples.some(
+          (sample) => normalizeWakeText(sample) === normalized,
+        )
+      ) {
+        setMessage(`「${transcript}」は登録済みです`);
+        return;
+      }
+      patch({
+        stt: {
+          ...draft.stt,
+          wakeSamples: [...draft.stt.wakeSamples, transcript].slice(0, 5),
+        },
+      });
+      setMessage(`ウェイクワード候補を登録しました: ${transcript}`);
+    } catch (error) {
+      void logError("record_wake_sample", error);
+      setMessage(`呼びかけ例を登録できませんでした: ${String(error)}`);
+    } finally {
+      voiceEngine.resumeAfterEnrollment();
+      setBusy(false);
+      setRecordingWake(false);
+    }
+  };
+
+  const autoTuneThreshold = async () => {
+    if (!voiceEngine.pauseForEnrollment()) {
+      setMessage("音声処理が終わってから校正してください");
+      return;
+    }
+
+    setBusy(true);
+    setCalibratingThreshold(true);
+    try {
+      const levels = await measureNoiseFloor();
+      if (levels.length < 20) {
+        throw new Error("周囲の音を十分に測定できませんでした");
+      }
+      levels.sort((a, b) => a - b);
+      const noiseFloor = levels[Math.floor((levels.length - 1) * 0.9)];
+      const threshold = Math.min(
+        0.4,
+        Math.max(0.002, Number((noiseFloor * 2.5 + 0.003).toFixed(4))),
+      );
+      patch({ stt: { ...draft.stt, threshold } });
+      setMessage(`VAD しきい値を ${threshold} に調整しました`);
+    } catch (error) {
+      void logError("calibrate_vad_threshold", error);
+      setMessage(`しきい値を校正できませんでした: ${String(error)}`);
+    } finally {
+      voiceEngine.resumeAfterEnrollment();
+      setBusy(false);
+      setCalibratingThreshold(false);
     }
   };
 
@@ -217,6 +386,7 @@ export default function SettingsDialog({
           <button
             type="button"
             onClick={onClose}
+            disabled={busy}
             className="rounded-md p-1 text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
           >
             <X size={14} />
@@ -343,6 +513,20 @@ export default function SettingsDialog({
           </Section>
 
           <Section title="会話">
+            <Row
+              label="呼び名"
+              hint="起動時は「〇〇様」と挨拶（様は入力不要）"
+            >
+              <input
+                value={draft.preferredName}
+                maxLength={32}
+                onChange={(event) =>
+                  patch({ preferredName: event.target.value })
+                }
+                placeholder="ボス"
+                className={INPUT_CLASS}
+              />
+            </Row>
             <div className="py-1.5">
               <p className="mb-1 text-[11px] text-[var(--text-secondary)]">
                 システムプロンプト
@@ -540,9 +724,21 @@ export default function SettingsDialog({
                 className={`${INPUT_CLASS} w-[90px]`}
               />
             </Row>
+            <div className="flex justify-end pb-2">
+              <button
+                type="button"
+                onClick={() => void autoTuneThreshold()}
+                disabled={busy || !settings?.sttAvailable}
+                className="rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
+              >
+                {calibratingThreshold
+                  ? "周囲の音を測定中..."
+                  : "周囲の音から自動調整"}
+              </button>
+            </div>
             <Row
               label="ハンズフリー（VAD 自動ターン交代）"
-              hint="起動語: J.A.R.V.I.S.（ジャーヴィス）いるか？"
+              hint="有効時に待機。起動語はJARVIS"
             >
               <Switch
                 checked={draft.stt.handsFree}
@@ -551,9 +747,147 @@ export default function SettingsDialog({
                 }
               />
             </Row>
+            <div className="space-y-2 border-t border-[var(--border-subtle)] pt-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                  「ジャービス」と4～5回呼びかけて認識候補を登録します。
+                  音声は保存せず、文字起こしだけを端末内に保存します。
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void recordWakeSample()}
+                  disabled={
+                    busy ||
+                    !settings?.sttAvailable ||
+                    draft.stt.wakeSamples.length >= 5
+                  }
+                  className="shrink-0 rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                >
+                  {recordingWake ? "録音中..." : "呼びかけを登録"}
+                </button>
+              </div>
+              {draft.stt.wakeSamples.length > 0 && (
+                <ul className="space-y-1">
+                  {draft.stt.wakeSamples.map((sample, index) => (
+                    <li
+                      key={`${sample}-${index}`}
+                      className="flex items-center justify-between rounded border border-[var(--border-subtle)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
+                    >
+                      <span>
+                        {index + 1}. {sample}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patch({
+                            stt: {
+                              ...draft.stt,
+                              wakeSamples: draft.stt.wakeSamples.filter(
+                                (_, sampleIndex) => sampleIndex !== index,
+                              ),
+                            },
+                          })
+                        }
+                        disabled={busy}
+                        aria-label={`${sample}を削除`}
+                        className="text-[var(--text-muted)] hover:text-[var(--error)] disabled:opacity-40"
+                      >
+                        <X size={11} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </Section>
 
           <Section title="ウィンドウ">
+            <Row label="HUDを固定">
+              <Switch
+                checked={draft.hud.pinned}
+                onChange={(pinned) =>
+                  patch({ hud: { ...draft.hud, pinned } })
+                }
+              />
+            </Row>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
+                幅
+                <input
+                  type="number"
+                  min="380"
+                  max="1920"
+                  value={draft.hud.width}
+                  onChange={(event) =>
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        width: Number(event.target.value),
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[90px]`}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
+                高さ
+                <input
+                  type="number"
+                  min="208"
+                  max="1080"
+                  value={draft.hud.height}
+                  onChange={(event) =>
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        height: Number(event.target.value),
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[90px]`}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
+                X座標
+                <input
+                  type="number"
+                  min="-16384"
+                  max="16384"
+                  value={draft.hud.positionX}
+                  onChange={(event) =>
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        positionX: Number(event.target.value),
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[90px]`}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
+                Y座標
+                <input
+                  type="number"
+                  min="-16384"
+                  max="16384"
+                  value={draft.hud.positionY}
+                  onChange={(event) =>
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        positionY: Number(event.target.value),
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[90px]`}
+                />
+              </label>
+            </div>
+            <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+              固定を有効にすると待機中は背面に表示し、ウェイクワードの後は
+              回答終了から10秒後に背面へ戻ります。変更は保存後に反映されます。
+            </p>
             <Row label="HUD をクリック透過">
               <Switch
                 checked={draft.hud.clickThrough}
@@ -638,8 +972,9 @@ export default function SettingsDialog({
               </button>
             </div>
             <p className="pt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">
-              `updates/latest.json` に新バージョンを記述し、同じフォルダに
-              インストーラを置くと更新できます。
+              exe隣接フォルダと
+              D:\プログラミング\AI_Project\JARVIS\updates の
+              latest.json およびインストーラを確認します。
             </p>
           </Section>
 
@@ -654,6 +989,7 @@ export default function SettingsDialog({
           <button
             type="button"
             onClick={onClose}
+            disabled={busy}
             className="rounded-md border border-[var(--border-strong)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] transition hover:text-[var(--text-primary)]"
           >
             閉じる

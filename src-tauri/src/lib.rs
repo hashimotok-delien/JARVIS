@@ -10,38 +10,90 @@ mod state;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent};
-use tauri_plugin_global_shortcut::{
-    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use crate::state::AppState;
 
 fn state_log_path() -> PathBuf {
-    paths::log_dir().join("startup.log")
+    paths::log_dir().join("jarvis.log")
 }
 
-fn append_log(message: &str) {
+fn timestamp_utc() -> String {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let days = (elapsed.as_secs() / 86_400) as i64;
+    let seconds = elapsed.as_secs() % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        seconds / 3_600,
+        seconds % 3_600 / 60,
+        seconds % 60,
+        elapsed.subsec_millis()
+    )
+}
+
+pub(crate) fn log_message(level: &str, source: &str, message: &str) {
     use std::io::Write;
 
+    static LOG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let safe_message = message.replace('\r', " ").replace('\n', " ");
+    let line = format!(
+        "{} [{}] [{}] {}\n",
+        timestamp_utc(),
+        level.to_uppercase(),
+        source,
+        safe_message
+    );
+    let lock = LOG_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = match lock.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("JARVIS logger lock failed: {error}");
+            return;
+        }
+    };
     let path = state_log_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            eprintln!("JARVIS log directory creation failed: {error}");
+            return;
+        }
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
+    let result = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
-    {
-        let _ = writeln!(file, "{message}");
+        .and_then(|mut file| file.write_all(line.as_bytes()));
+    if let Err(error) = result {
+        eprintln!("JARVIS log write failed: {error}");
     }
 }
 
 fn install_panic_logger() {
     std::panic::set_hook(Box::new(|info| {
-        append_log(&format!("[panic] {info}"));
+        log_message("ERROR", "panic", &info.to_string());
     }));
 }
 
@@ -52,23 +104,14 @@ fn read_version_file(dir: &Path) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn write_version_file(dir: &Path, version: &str) {
-    let _ = std::fs::write(dir.join("version.txt"), version);
-}
-
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let handle = app.handle();
 
-    let show_item =
-        MenuItem::with_id(handle, "show", "表示", true, None::<&str>)?;
-    let hud_item =
-        MenuItem::with_id(handle, "hud", "HUD 切替", true, None::<&str>)?;
-    let voice_item =
-        MenuItem::with_id(handle, "voice", "音声入力", true, None::<&str>)?;
-    let mute_item =
-        MenuItem::with_id(handle, "mute", "ミュート切替", true, None::<&str>)?;
-    let quit_item =
-        MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(handle, "show", "表示", true, None::<&str>)?;
+    let hud_item = MenuItem::with_id(handle, "hud", "HUD 切替", true, None::<&str>)?;
+    let voice_item = MenuItem::with_id(handle, "voice", "音声入力", true, None::<&str>)?;
+    let mute_item = MenuItem::with_id(handle, "mute", "ミュート切替", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(handle, "quit", "終了", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         handle,
@@ -84,11 +127,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             "hud" => {
                 commands::app::toggle_hud_window(app);
             }
-            "voice" => {
-                events::emit(app, events::VOICE_TOGGLE, "toggle".to_string())
-            }
+            "voice" => events::emit(app, events::VOICE_TOGGLE, "toggle".to_string()),
             "mute" => {
-                let _ = commands::app::toggle_mute_impl(app);
+                if let Err(error) = commands::app::toggle_mute_impl(app) {
+                    log_message("ERROR", "tray", &format!("toggle mute: {error}"));
+                }
             }
             "quit" => {
                 if let Some(state) = app.try_state::<AppState>() {
@@ -117,20 +160,33 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn apply_window_icons(app: &tauri::App) {
+    let Some(icon) = app.default_window_icon() else {
+        log_message("ERROR", "window", "default application icon is missing");
+        return;
+    };
+
+    for label in ["main", "hud"] {
+        if let Some(window) = app.get_webview_window(label) {
+            if let Err(error) = window.set_icon(icon.clone()) {
+                log_message(
+                    "ERROR",
+                    "window",
+                    &format!("set {label} window icon: {error}"),
+                );
+            }
+        }
+    }
+}
+
 fn register_shortcuts(app: &AppHandle) {
     let shortcuts = [
         (
-            Shortcut::new(
-                Some(Modifiers::CONTROL | Modifiers::ALT),
-                Code::Space,
-            ),
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space),
             "Ctrl+Alt+Space（音声入力）",
         ),
         (
-            Shortcut::new(
-                Some(Modifiers::CONTROL | Modifiers::ALT),
-                Code::KeyH,
-            ),
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH),
             "Ctrl+Alt+H（HUD）",
         ),
     ];
@@ -138,7 +194,11 @@ fn register_shortcuts(app: &AppHandle) {
     // A conflicting shortcut must never prevent the app from starting.
     for (shortcut, label) in shortcuts {
         if let Err(error) = app.global_shortcut().register(shortcut) {
-            eprintln!("グローバルショートカット {label} を登録できません: {error}");
+            log_message(
+                "ERROR",
+                "shortcut",
+                &format!("グローバルショートカット {label} を登録できません: {error}"),
+            );
         }
     }
 }
@@ -158,15 +218,8 @@ pub fn run() {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    if shortcut.matches(
-                        Modifiers::CONTROL | Modifiers::ALT,
-                        Code::Space,
-                    ) {
-                        events::emit(
-                            app,
-                            events::VOICE_TOGGLE,
-                            "toggle".to_string(),
-                        );
+                    if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::Space) {
+                        events::emit(app, events::VOICE_TOGGLE, "toggle".to_string());
                     } else {
                         commands::app::toggle_hud_window(app);
                     }
@@ -185,14 +238,18 @@ pub fn run() {
                     .unwrap_or(false);
                 if !quitting {
                     api.prevent_close();
-                    let _ = window.hide();
+                    if let Err(error) = window.hide() {
+                        log_message("ERROR", "window", &format!("hide main on close: {error}"));
+                    }
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::app_info,
+            commands::app::write_log,
             commands::app::toggle_hud,
             commands::app::set_hud_visible,
+            commands::app::set_hud_priority,
             commands::app::request_voice_toggle,
             commands::app::report_voice_state,
             commands::app::toggle_mute,
@@ -212,6 +269,7 @@ pub fn run() {
             commands::settings::set_gemini_key,
             commands::settings::test_providers,
             commands::voice::transcribe,
+            commands::voice::transcribe_wake_sample,
             commands::voice::speak,
             commands::update::check_update,
             commands::update::launch_update_installer,
@@ -222,13 +280,14 @@ pub fn run() {
 
             let data_dir = paths::resolve_data_dir(handle);
             std::fs::create_dir_all(&data_dir)?;
-            let conn = db::open(&data_dir.join("jarvis.db"))
-                .map_err(std::io::Error::other)?;
+            let conn = db::open(&data_dir.join("jarvis.db")).map_err(std::io::Error::other)?;
 
             let current_version = env!("CARGO_PKG_VERSION").to_string();
-            let previous_version = read_version_file(&data_dir)
-                .filter(|version| version != &current_version);
-            write_version_file(&data_dir, &current_version);
+            let previous_version =
+                read_version_file(&data_dir).filter(|version| version != &current_version);
+            if let Err(error) = std::fs::write(data_dir.join("version.txt"), &current_version) {
+                log_message("ERROR", "startup", &format!("version.txt: {error}"));
+            }
 
             let state = AppState::new(conn, data_dir);
             if let Ok(mut slot) = state.previous_version.lock() {
@@ -236,6 +295,7 @@ pub fn run() {
             }
             app.manage(state);
 
+            apply_window_icons(app);
             setup_tray(app)?;
             register_shortcuts(handle);
 
@@ -244,15 +304,22 @@ pub fn run() {
 
             if settings.start_minimized {
                 if let Some(main) = handle.get_webview_window("main") {
-                    let _ = main.hide();
+                    if let Err(error) = main.hide() {
+                        log_message("ERROR", "startup", &format!("hide main window: {error}"));
+                    }
                 }
             }
 
+            log_message(
+                "INFO",
+                "startup",
+                &format!("JARVIS v{current_version} started"),
+            );
             Ok(())
         })
         .run(tauri::generate_context!());
 
     if let Err(error) = result {
-        append_log(&format!("[startup] {error}"));
+        log_message("ERROR", "startup", &error.to_string());
     }
 }

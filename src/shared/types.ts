@@ -54,17 +54,24 @@ export interface SttSettings {
   silenceMs: number;
   threshold: number;
   handsFree: boolean;
+  wakeSamples: string[];
   followUpMs: number;
 }
 
 export interface HudSettings {
   clickThrough: boolean;
   opacity: number;
+  pinned: boolean;
+  width: number;
+  height: number;
+  positionX: number;
+  positionY: number;
 }
 
 export interface Settings {
   providers: ProviderSettings;
   systemPrompt: string;
+  preferredName: string;
   temperature: number;
   maxHistory: number;
   tts: TtsSettings;

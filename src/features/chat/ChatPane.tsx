@@ -6,6 +6,7 @@ import type { ChatMessage } from "../../shared/types";
 
 interface ChatPaneProps {
   title: string;
+  preferredName: string;
   messages: ChatMessage[];
   isStreaming: boolean;
   provider: string | null;
@@ -32,7 +33,16 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         }`}
         style={isUser ? undefined : { boxShadow: "var(--glow-accent)" }}
       >
-        {isUser ? "YOU" : "J"}
+        {isUser ? (
+          "YOU"
+        ) : (
+          <img
+            src="/jarvis.png"
+            alt=""
+            aria-hidden="true"
+            className="h-full w-full rounded-full object-cover"
+          />
+        )}
       </div>
 
       <div
@@ -62,6 +72,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
 export default function ChatPane({
   title,
+  preferredName,
   messages,
   isStreaming,
   provider,
@@ -69,17 +80,24 @@ export default function ChatPane({
   latencyMs,
   onStop,
 }: ChatPaneProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "end",
-    });
-  }, [messages]);
+    const container = messagesRef.current;
+    if (!container) return;
+
+    if (isStreaming) {
+      container.scrollTop = container.scrollHeight;
+    } else {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [isStreaming, messages]);
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] px-5">
         <h2 className="truncate text-sm font-medium text-[var(--text-primary)]">
           {title}
@@ -104,17 +122,20 @@ export default function ChatPane({
         )}
       </header>
 
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div
+        ref={messagesRef}
+        className="min-h-0 flex-1 overflow-y-auto px-5 py-4"
+      >
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <div
-              className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--accent-dim)] text-sm font-semibold text-[var(--accent)]"
+            <img
+              src="/jarvis.png"
+              alt="J.A.R.V.I.S."
+              className="h-12 w-12 rounded-lg border border-[var(--accent-dim)] object-cover"
               style={{ boxShadow: "var(--glow-accent)" }}
-            >
-              J
-            </div>
+            />
             <p className="text-sm text-[var(--text-secondary)]">
-              何でも聞いてください、ボス。
+              何でも聞いてください、{preferredName}。
             </p>
             <p className="max-w-sm text-xs leading-relaxed text-[var(--text-muted)]">
               Enter で送信 / Shift + Enter で改行。
@@ -127,7 +148,6 @@ export default function ChatPane({
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
-            <div ref={bottomRef} />
           </div>
         )}
       </div>

@@ -6,13 +6,16 @@ import HudRing from "./HudRing";
 import { HUD_STATE_META } from "./states";
 import { isTauri, requestVoiceToggle } from "../../lib/ipc/app";
 import { listMessages, listThreads } from "../../lib/ipc/chat";
+import { logError } from "../../lib/logging";
 import { toggleMute } from "../../lib/ipc/settings";
 import {
   CHAT_DELTA,
   CHAT_DONE,
   CHAT_ERROR,
+  CHAT_PROVIDER,
   CHAT_TITLE,
   VOICE_STATE,
+  VOICE_TRANSCRIPT,
   onEvent,
 } from "../../lib/ipc/events";
 import { settingsStore } from "../settings/settingsStore";
@@ -21,9 +24,11 @@ import type {
   ChatDeltaEvent,
   ChatDoneEvent,
   ChatErrorEvent,
+  ChatProviderEvent,
   ChatTitleEvent,
   HudState,
   VoiceStateEvent,
+  VoiceTranscriptEvent,
 } from "../../shared/types";
 
 function WaveBars({ active }: { active: boolean }) {
@@ -54,13 +59,13 @@ function WaveBars({ active }: { active: boolean }) {
   );
 }
 
-const MAX_SUBTITLE = 260;
-
 export default function HudOverlay() {
   const settings = useSettings();
   const [state, setState] = useState<HudState>("idle");
   const [detail, setDetail] = useState<string | null>(null);
   const [subtitle, setSubtitle] = useState("");
+  const [userInput, setUserInput] = useState("");
+  const [providerModel, setProviderModel] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,11 +83,15 @@ export default function HudOverlay() {
         const lastReply = [...messages]
           .reverse()
           .find((message) => message.role === "assistant");
+        const lastRequest = [...messages]
+          .reverse()
+          .find((message) => message.role === "user");
         if (lastReply?.content) {
           setSubtitle(lastReply.content);
         }
-      } catch {
-        // The HUD still works without a stored thread.
+        if (lastRequest?.content) setUserInput(lastRequest.content);
+      } catch (error) {
+        void logError("hud_load_latest_message", error);
       }
     })();
 
@@ -102,6 +111,11 @@ export default function HudOverlay() {
 
     void onEvent<ChatDoneEvent>(CHAT_DONE, (payload) => {
       setSubtitle(payload.content);
+      setProviderModel(`${payload.provider} · ${payload.model}`);
+    }).then((unlisten) => unlisteners.push(unlisten));
+
+    void onEvent<ChatProviderEvent>(CHAT_PROVIDER, (payload) => {
+      setProviderModel(`${payload.provider} · ${payload.model}`);
     }).then((unlisten) => unlisteners.push(unlisten));
 
     void onEvent<ChatErrorEvent>(CHAT_ERROR, (payload) => {
@@ -112,6 +126,10 @@ export default function HudOverlay() {
       setErrorText(null);
     }).then((unlisten) => unlisteners.push(unlisten));
 
+    void onEvent<VoiceTranscriptEvent>(VOICE_TRANSCRIPT, (payload) => {
+      setUserInput(payload.text);
+    }).then((unlisten) => unlisteners.push(unlisten));
+
     return () => {
       unlisteners.forEach((unlisten) => unlisten());
     };
@@ -120,6 +138,7 @@ export default function HudOverlay() {
   const meta = HUD_STATE_META[state];
   const muted = settings ? !settings.tts.enabled : false;
   const listening = state === "listening";
+  const expanded = (settings?.hud.width ?? 380) >= 600;
 
   const close = () => {
     if (isTauri) {
@@ -127,10 +146,7 @@ export default function HudOverlay() {
     }
   };
 
-  const visibleText =
-    errorText ?? (subtitle.length > MAX_SUBTITLE
-      ? `…${subtitle.slice(-MAX_SUBTITLE)}`
-      : subtitle);
+  const visibleText = errorText ?? subtitle;
 
   return (
     <div className="flex h-full w-full items-center justify-center p-2">
@@ -147,13 +163,19 @@ export default function HudOverlay() {
         }}
       >
         <header
-          data-tauri-drag-region
+          data-tauri-drag-region={settings?.hud.pinned ? undefined : ""}
           className="flex items-center justify-between px-3 py-1.5"
         >
           <span
-            data-tauri-drag-region
-            className="text-[10px] tracking-[0.34em] text-[var(--text-muted)]"
+            data-tauri-drag-region={settings?.hud.pinned ? undefined : ""}
+            className="flex items-center gap-1.5 text-[10px] tracking-[0.34em] text-[var(--text-muted)]"
           >
+            <img
+              src="/jarvis.png"
+              alt=""
+              aria-hidden="true"
+              className="h-4 w-4 rounded-sm object-cover"
+            />
             J.A.R.V.I.S.
           </span>
           <button
@@ -166,10 +188,12 @@ export default function HudOverlay() {
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1 items-center gap-2 px-3 pb-2">
-          <HudRing state={state} size={88} />
+        <div className="flex min-h-0 flex-1 items-stretch gap-3 px-3 pb-2">
+          <div className="flex shrink-0 items-center">
+            <HudRing state={state} size={expanded ? 132 : 88} />
+          </div>
 
-          <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2">
               <span
                 className="text-sm font-semibold tracking-wide"
@@ -184,7 +208,24 @@ export default function HudOverlay() {
               </span>
             </div>
 
-            <p className="mt-0.5 line-clamp-3 min-h-[38px] text-[11px] leading-relaxed text-[var(--text-secondary)]">
+            {providerModel && (
+              <span className="mt-0.5 text-[9px] text-[var(--text-muted)]">
+                {providerModel}
+              </span>
+            )}
+
+            {expanded && userInput && (
+              <div className="mt-1 min-h-0 overflow-y-auto rounded border border-[var(--border-subtle)] px-2 py-1">
+                <span className="text-[9px] tracking-wider text-[var(--accent)]">
+                  YOU
+                </span>
+                <p className="whitespace-pre-wrap break-words text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                  {userInput}
+                </p>
+              </div>
+            )}
+
+            <p className="mt-0.5 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-[var(--text-secondary)]">
               {visibleText ||
                 (detail ?? meta.hint)}
             </p>

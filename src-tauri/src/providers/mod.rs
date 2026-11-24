@@ -2,8 +2,8 @@
 
 pub mod openai_compat;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
 
@@ -20,10 +20,7 @@ pub fn gemini_key(app: &AppHandle) -> Option<String> {
     db::get_secret(&conn, "gemini_api_key")
 }
 
-pub fn resolve_providers(
-    app: &AppHandle,
-    settings: &Settings,
-) -> Vec<ProviderConfig> {
+pub fn resolve_providers(app: &AppHandle, settings: &Settings) -> Vec<ProviderConfig> {
     let key = gemini_key(app);
 
     settings
@@ -81,20 +78,28 @@ fn persist_assistant(
         model: Some(model.to_string()),
         error,
     };
-    let _ = db::insert_message(&conn, &message);
-    let _ = db::touch_thread(&conn, &ctx.thread_id);
+    if let Err(error) = db::insert_message(&conn, &message) {
+        crate::log_message(
+            "ERROR",
+            "database",
+            &format!("persist assistant message: {error}"),
+        );
+    }
+    if let Err(error) = db::touch_thread(&conn, &ctx.thread_id) {
+        crate::log_message(
+            "ERROR",
+            "database",
+            &format!("update thread timestamp: {error}"),
+        );
+    }
 }
 
-pub async fn run(
-    app: AppHandle,
-    ctx: StreamContext,
-    settings: Settings,
-    cancel: Arc<AtomicBool>,
-) {
+pub async fn run(app: AppHandle, ctx: StreamContext, settings: Settings, cancel: Arc<AtomicBool>) {
     let providers = resolve_providers(&app, &settings);
 
     if providers.is_empty() {
-        let error = "利用可能なプロバイダがありません。設定で API キーまたは Ollama を確認してください。";
+        let error =
+            "利用可能なプロバイダがありません。設定で API キーまたは Ollama を確認してください。";
         persist_assistant(&app, &ctx, "", "none", "none", Some(error.into()));
         events::emit(
             &app,
@@ -183,37 +188,24 @@ pub async fn run(
             let request_id = ctx.request_id.clone();
             let thread_id = ctx.thread_id.clone();
             let message_id = ctx.message_id.clone();
-            openai_compat::stream_chat(
-                provider,
-                &ctx.turns,
-                &cancel,
-                &mut content,
-                move |delta| {
-                    events::emit(
-                        app_ref,
-                        events::CHAT_DELTA,
-                        ChatDelta {
-                            request_id: request_id.clone(),
-                            thread_id: thread_id.clone(),
-                            message_id: message_id.clone(),
-                            delta: delta.to_string(),
-                        },
-                    );
-                },
-            )
+            openai_compat::stream_chat(provider, &ctx.turns, &cancel, &mut content, move |delta| {
+                events::emit(
+                    app_ref,
+                    events::CHAT_DELTA,
+                    ChatDelta {
+                        request_id: request_id.clone(),
+                        thread_id: thread_id.clone(),
+                        message_id: message_id.clone(),
+                        delta: delta.to_string(),
+                    },
+                );
+            })
             .await
         };
 
         match result {
             Ok(()) => {
-                persist_assistant(
-                    &app,
-                    &ctx,
-                    &content,
-                    provider.id,
-                    &provider.model,
-                    None,
-                );
+                persist_assistant(&app, &ctx, &content, provider.id, &provider.model, None);
                 events::emit(
                     &app,
                     events::CHAT_DONE,
@@ -231,14 +223,7 @@ pub async fn run(
                 return;
             }
             Err(StreamFailure::Cancelled) => {
-                persist_assistant(
-                    &app,
-                    &ctx,
-                    &content,
-                    provider.id,
-                    &provider.model,
-                    None,
-                );
+                persist_assistant(&app, &ctx, &content, provider.id, &provider.model, None);
                 events::emit(
                     &app,
                     events::CHAT_DONE,
@@ -256,11 +241,17 @@ pub async fn run(
                 return;
             }
             Err(failure) => {
-                failures.push(format!(
-                    "{}: {}",
-                    provider.label,
-                    failure.message()
-                ));
+                crate::log_message(
+                    "WARN",
+                    "provider",
+                    &format!(
+                        "{} model={} failed: {}",
+                        provider.label,
+                        provider.model,
+                        failure.message()
+                    ),
+                );
+                failures.push(format!("{}: {}", provider.label, failure.message()));
             }
         }
     }

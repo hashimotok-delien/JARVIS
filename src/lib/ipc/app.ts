@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo } from "../../shared/types";
+import { logError } from "../logging";
 
 export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -11,7 +12,7 @@ export async function getAppInfo(): Promise<AppInfo | null> {
   try {
     return await invoke<AppInfo>("app_info");
   } catch (error) {
-    console.error("app_info failed", error);
+    void logError("app_info", error);
     return null;
   }
 }
@@ -23,7 +24,7 @@ export async function toggleHud(): Promise<boolean> {
   try {
     return await invoke<boolean>("toggle_hud");
   } catch (error) {
-    console.error("toggle_hud failed", error);
+    void logError("toggle_hud", error);
     return false;
   }
 }
@@ -31,6 +32,15 @@ export async function toggleHud(): Promise<boolean> {
 export async function setHudVisible(visible: boolean): Promise<void> {
   if (!isTauri) return;
   await invoke("set_hud_visible", { visible });
+}
+
+export async function setHudPriority(foreground: boolean): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke("set_hud_priority", { foreground });
+  } catch (error) {
+    void logError("set_hud_priority", error);
+  }
 }
 
 export async function requestVoiceToggle(): Promise<void> {

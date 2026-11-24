@@ -1,6 +1,6 @@
 //! SQLite persistence for threads, messages, settings and secrets.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -84,10 +84,7 @@ pub fn list_threads(conn: &Connection) -> Result<Vec<Thread>, String> {
         .map_err(|e| e.to_string())
 }
 
-pub fn get_thread(
-    conn: &Connection,
-    id: &str,
-) -> Result<Option<Thread>, String> {
+pub fn get_thread(conn: &Connection, id: &str) -> Result<Option<Thread>, String> {
     conn.query_row(
         "SELECT id, title, pinned, created_at, updated_at
          FROM threads WHERE id = ?1",
@@ -106,11 +103,7 @@ pub fn get_thread(
     .map_err(|e| e.to_string())
 }
 
-pub fn create_thread(
-    conn: &Connection,
-    id: &str,
-    title: &str,
-) -> Result<Thread, String> {
+pub fn create_thread(conn: &Connection, id: &str, title: &str) -> Result<Thread, String> {
     let now = now_ms();
     conn.execute(
         "INSERT INTO threads (id, title, pinned, created_at, updated_at)
@@ -127,11 +120,7 @@ pub fn create_thread(
     })
 }
 
-pub fn rename_thread(
-    conn: &Connection,
-    id: &str,
-    title: &str,
-) -> Result<(), String> {
+pub fn rename_thread(conn: &Connection, id: &str, title: &str) -> Result<(), String> {
     conn.execute(
         "UPDATE threads SET title = ?2 WHERE id = ?1",
         params![id, title],
@@ -146,11 +135,7 @@ pub fn delete_thread(conn: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn set_pinned(
-    conn: &Connection,
-    id: &str,
-    pinned: bool,
-) -> Result<(), String> {
+pub fn set_pinned(conn: &Connection, id: &str, pinned: bool) -> Result<(), String> {
     conn.execute(
         "UPDATE threads SET pinned = ?2 WHERE id = ?1",
         params![id, i64::from(pinned)],
@@ -168,10 +153,7 @@ pub fn touch_thread(conn: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn list_messages(
-    conn: &Connection,
-    thread_id: &str,
-) -> Result<Vec<Message>, String> {
+pub fn list_messages(conn: &Connection, thread_id: &str) -> Result<Vec<Message>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, thread_id, role, content, created_at,
@@ -199,10 +181,7 @@ pub fn list_messages(
         .map_err(|e| e.to_string())
 }
 
-pub fn insert_message(
-    conn: &Connection,
-    message: &Message,
-) -> Result<(), String> {
+pub fn insert_message(conn: &Connection, message: &Message) -> Result<(), String> {
     conn.execute(
         "INSERT INTO messages
             (id, thread_id, role, content, provider, model, error, created_at)
@@ -223,24 +202,40 @@ pub fn insert_message(
 }
 
 pub fn load_settings(conn: &Connection) -> Settings {
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'app'",
-            [],
-            |row| row.get(0),
-        )
+    let raw: Option<String> = match conn
+        .query_row("SELECT value FROM settings WHERE key = 'app'", [], |row| {
+            row.get(0)
+        })
         .optional()
-        .unwrap_or(None);
+    {
+        Ok(raw) => raw,
+        Err(error) => {
+            crate::log_message(
+                "ERROR",
+                "settings",
+                &format!("failed to read settings: {error}"),
+            );
+            None
+        }
+    };
 
-    raw.and_then(|json| serde_json::from_str::<Settings>(&json).ok())
-        .unwrap_or_default()
-        .sanitized()
+    match raw {
+        Some(json) => match serde_json::from_str::<Settings>(&json) {
+            Ok(settings) => settings.sanitized(),
+            Err(error) => {
+                crate::log_message(
+                    "ERROR",
+                    "settings",
+                    &format!("failed to parse saved settings: {error}"),
+                );
+                Settings::default()
+            }
+        },
+        None => Settings::default(),
+    }
 }
 
-pub fn save_settings(
-    conn: &Connection,
-    settings: &Settings,
-) -> Result<(), String> {
+pub fn save_settings(conn: &Connection, settings: &Settings) -> Result<(), String> {
     let json = serde_json::to_string(settings).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES ('app', ?1)
@@ -266,11 +261,7 @@ pub fn get_secret(conn: &Connection, key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub fn set_secret(
-    conn: &Connection,
-    key: &str,
-    plain: Option<&str>,
-) -> Result<(), String> {
+pub fn set_secret(conn: &Connection, key: &str, plain: Option<&str>) -> Result<(), String> {
     match plain.map(str::trim).filter(|v| !v.is_empty()) {
         Some(value) => {
             let encoded = secrets::protect(value)?;

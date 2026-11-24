@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, State};
 
 use crate::db;
@@ -85,7 +85,7 @@ pub async fn send_message(
         let start = history.len().saturating_sub(settings.max_history);
         let mut turns = vec![ChatTurn {
             role: "system".into(),
-            content: settings.system_prompt.clone(),
+            content: settings.system_prompt_for_chat(),
         }];
         for message in &history[start..] {
             if message.content.trim().is_empty() {
@@ -135,13 +135,7 @@ pub async fn send_message(
     let app_handle = app.clone();
     let request_key = request_id.clone();
     tauri::async_runtime::spawn(async move {
-        providers::run(
-            app_handle.clone(),
-            context,
-            settings,
-            cancel,
-        )
-        .await;
+        providers::run(app_handle.clone(), context, settings, cancel).await;
 
         if let Some(state) = app_handle.try_state::<AppState>() {
             if let Ok(mut cancels) = state.cancels.lock() {
@@ -159,10 +153,7 @@ pub async fn send_message(
 }
 
 #[tauri::command]
-pub fn stop_generation(
-    state: State<'_, AppState>,
-    request_id: String,
-) {
+pub fn stop_generation(state: State<'_, AppState>, request_id: String) {
     if let Ok(cancels) = state.cancels.lock() {
         if let Some(flag) = cancels.get(&request_id) {
             flag.store(true, Ordering::Relaxed);

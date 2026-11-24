@@ -5,18 +5,13 @@ use crate::models::{Message, Thread};
 use crate::state::AppState;
 
 #[tauri::command]
-pub fn list_threads(
-    state: State<'_, AppState>,
-) -> Result<Vec<Thread>, String> {
+pub fn list_threads(state: State<'_, AppState>) -> Result<Vec<Thread>, String> {
     let conn = crate::commands::lock_db(&state)?;
     db::list_threads(&conn)
 }
 
 #[tauri::command]
-pub fn create_thread(
-    state: State<'_, AppState>,
-    title: Option<String>,
-) -> Result<Thread, String> {
+pub fn create_thread(state: State<'_, AppState>, title: Option<String>) -> Result<Thread, String> {
     let conn = crate::commands::lock_db(&state)?;
     let id = uuid::Uuid::new_v4().to_string();
     let title = title
@@ -27,11 +22,7 @@ pub fn create_thread(
 }
 
 #[tauri::command]
-pub fn rename_thread(
-    state: State<'_, AppState>,
-    id: String,
-    title: String,
-) -> Result<(), String> {
+pub fn rename_thread(state: State<'_, AppState>, id: String, title: String) -> Result<(), String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("タイトルが空です".into());
@@ -41,10 +32,7 @@ pub fn rename_thread(
 }
 
 #[tauri::command]
-pub fn delete_thread(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub fn delete_thread(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let conn = crate::commands::lock_db(&state)?;
     db::delete_thread(&conn, &id)
 }
@@ -93,8 +81,8 @@ pub fn export_thread(
 ) -> Result<String, String> {
     let (thread, messages) = {
         let conn = crate::commands::lock_db(&state)?;
-        let thread = db::get_thread(&conn, &id)?
-            .ok_or_else(|| "スレッドが見つかりません".to_string())?;
+        let thread =
+            db::get_thread(&conn, &id)?.ok_or_else(|| "スレッドが見つかりません".to_string())?;
         let messages = db::list_messages(&conn, &id)?;
         (thread, messages)
     };
@@ -111,8 +99,7 @@ pub fn export_thread(
             "thread": thread,
             "messages": messages,
         });
-        let text = serde_json::to_string_pretty(&payload)
-            .map_err(|e| e.to_string())?;
+        let text = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
         std::fs::write(&path, text).map_err(|e| e.to_string())?;
         return Ok(path.to_string_lossy().to_string());
     }

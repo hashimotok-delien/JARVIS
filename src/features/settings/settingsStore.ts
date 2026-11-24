@@ -7,6 +7,7 @@ import {
   testProviders,
 } from "../../lib/ipc/settings";
 import { SETTINGS_CHANGED, onEvent } from "../../lib/ipc/events";
+import { logError } from "../../lib/logging";
 import type {
   ProviderCheck,
   Settings,
@@ -42,7 +43,12 @@ class SettingsStore {
     if (this.initialized) return;
     this.initialized = true;
 
-    this.set(await getSettings().catch(() => DEFAULT_SETTINGS));
+    try {
+      this.set(await getSettings());
+    } catch (error) {
+      void logError("get_settings", error);
+      this.set(DEFAULT_SETTINGS);
+    }
 
     await onEvent<Settings>(SETTINGS_CHANGED, (payload) => {
       this.set({

@@ -1,13 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UpdateStatus } from "../../shared/types";
 import { isTauri } from "./app";
+import { logError } from "../logging";
 
 export async function checkUpdate(): Promise<UpdateStatus | null> {
   if (!isTauri) return null;
   try {
     return await invoke<UpdateStatus>("check_update");
   } catch (error) {
-    console.error("check_update failed", error);
+    void logError("check_update", error);
     return null;
   }
 }

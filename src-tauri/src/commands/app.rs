@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, State};
 
 use crate::db;
 use crate::events::{self, VoiceState};
@@ -20,11 +20,30 @@ pub fn app_info() -> AppInfo {
     }
 }
 
+#[tauri::command]
+pub fn write_log(level: String, source: String, message: String) {
+    let level = match level.to_ascii_uppercase().as_str() {
+        "ERROR" => "ERROR",
+        "WARN" => "WARN",
+        "INFO" => "INFO",
+        _ => "DEBUG",
+    };
+    let source: String = source.chars().take(80).collect();
+    let message: String = message.chars().take(12_000).collect();
+    crate::log_message(level, &source, &message);
+}
+
 pub fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        if let Err(error) = window.show() {
+            crate::log_message("ERROR", "window", &format!("show main: {error}"));
+        }
+        if let Err(error) = window.unminimize() {
+            crate::log_message("ERROR", "window", &format!("unminimize main: {error}"));
+        }
+        if let Err(error) = window.set_focus() {
+            crate::log_message("ERROR", "window", &format!("focus main: {error}"));
+        }
     }
 }
 
@@ -33,12 +52,28 @@ pub fn toggle_hud_window(app: &AppHandle) -> bool {
         return false;
     };
 
-    if hud.is_visible().unwrap_or(false) {
-        let _ = hud.hide();
+    let visible = match hud.is_visible() {
+        Ok(visible) => visible,
+        Err(error) => {
+            crate::log_message("ERROR", "window", &format!("check HUD visibility: {error}"));
+            return false;
+        }
+    };
+
+    if visible {
+        if let Err(error) = hud.hide() {
+            crate::log_message("ERROR", "window", &format!("hide HUD: {error}"));
+            return false;
+        }
         false
     } else {
-        let _ = hud.show();
-        let _ = hud.set_focus();
+        if let Err(error) = hud.show() {
+            crate::log_message("ERROR", "window", &format!("show HUD: {error}"));
+            return false;
+        }
+        if let Err(error) = hud.set_focus() {
+            crate::log_message("ERROR", "window", &format!("focus HUD: {error}"));
+        }
         true
     }
 }
@@ -62,8 +97,57 @@ pub fn toggle_mute_impl(app: &AppHandle) -> Result<bool, String> {
 
 pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
     if let Some(hud) = app.get_webview_window("hud") {
-        let _ = hud.set_ignore_cursor_events(settings.hud.click_through);
+        if let Err(error) = hud.set_ignore_cursor_events(settings.hud.click_through) {
+            crate::log_message(
+                "ERROR",
+                "window",
+                &format!("apply HUD click-through: {error}"),
+            );
+        }
+        if let Err(error) = hud.set_size(LogicalSize::new(
+            settings.hud.width as f64,
+            settings.hud.height as f64,
+        )) {
+            crate::log_message("ERROR", "window", &format!("resize HUD: {error}"));
+        }
+        if let Err(error) = hud.set_position(LogicalPosition::new(
+            settings.hud.position_x as f64,
+            settings.hud.position_y as f64,
+        )) {
+            crate::log_message("ERROR", "window", &format!("position HUD: {error}"));
+        }
+        if let Err(error) = hud.set_always_on_top(!settings.hud.pinned) {
+            crate::log_message("ERROR", "window", &format!("set HUD priority: {error}"));
+        }
+        if settings.hud.pinned {
+            if let Err(error) = hud.show() {
+                crate::log_message("ERROR", "window", &format!("show pinned HUD: {error}"));
+            }
+        }
     }
+}
+
+#[tauri::command]
+pub fn set_hud_priority(app: AppHandle, foreground: bool) -> Result<(), String> {
+    let settings = crate::commands::read_settings_from(&app);
+    if !settings.hud.pinned {
+        return Ok(());
+    }
+
+    let hud = app
+        .get_webview_window("hud")
+        .ok_or_else(|| "HUD ウィンドウが見つかりません".to_string())?;
+
+    if foreground {
+        hud.set_always_on_top(true)
+            .map_err(|error| format!("HUDを前面にできません: {error}"))?;
+        hud.show()
+            .map_err(|error| format!("HUDを表示できません: {error}"))?;
+    } else {
+        hud.set_always_on_top(false)
+            .map_err(|error| format!("HUDを背面にできません: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -74,10 +158,9 @@ pub fn toggle_hud(app: AppHandle) -> bool {
 #[tauri::command]
 pub fn set_hud_visible(app: AppHandle, visible: bool) {
     if let Some(hud) = app.get_webview_window("hud") {
-        if visible {
-            let _ = hud.show();
-        } else {
-            let _ = hud.hide();
+        let result = if visible { hud.show() } else { hud.hide() };
+        if let Err(error) = result {
+            crate::log_message("ERROR", "window", &format!("set HUD visibility: {error}"));
         }
     }
 }
@@ -95,9 +178,18 @@ pub fn report_voice_state(
     state_name: String,
     detail: Option<String>,
 ) {
-    if let Ok(mut voice) = state.voice.lock() {
-        voice.state = state_name.clone();
-        voice.detail = detail.clone();
+    match state.voice.lock() {
+        Ok(mut voice) => {
+            voice.state = state_name.clone();
+            voice.detail = detail.clone();
+        }
+        Err(error) => {
+            crate::log_message(
+                "ERROR",
+                "voice",
+                &format!("voice state lock failed: {error}"),
+            );
+        }
     }
     events::emit(
         &app,
@@ -115,10 +207,7 @@ pub fn toggle_mute(app: AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn apply_hud_settings(
-    app: AppHandle,
-    settings: Settings,
-) -> Result<(), String> {
+pub fn apply_hud_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     apply_hud_options(&app, &settings);
     Ok(())
 }
