@@ -5,7 +5,8 @@
 
 use futures_util::StreamExt;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -13,6 +14,46 @@ use std::time::Duration;
 pub struct ChatTurn {
     pub role: String,
     pub content: String,
+    /// Data URLs (`data:image/png;base64,...`) for vision models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Reply {
+    pub content: String,
+    pub tool_calls: Vec<ToolCall>,
+}
+
+impl ChatTurn {
+    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            images: Vec::new(),
+        }
+    }
+
+    pub fn to_value(&self) -> Value {
+        if self.images.is_empty() {
+            return json!({ "role": self.role, "content": self.content });
+        }
+        let mut parts = vec![json!({ "type": "text", "text": self.content })];
+        for image in &self.images {
+            parts.push(json!({
+                "type": "image_url",
+                "image_url": { "url": image }
+            }));
+        }
+        json!({ "role": self.role, "content": parts })
+    }
 }
 
 pub struct ProviderConfig {
@@ -58,13 +99,13 @@ fn truncate(value: &str, max: usize) -> String {
     format!("{head}…")
 }
 
-pub async fn stream_chat<F>(
+pub async fn stream_request<F>(
     cfg: &ProviderConfig,
-    turns: &[ChatTurn],
+    messages: &[Value],
+    tools: Option<&Value>,
     cancel: &AtomicBool,
-    out: &mut String,
     mut on_delta: F,
-) -> Result<(), StreamFailure>
+) -> Result<Reply, StreamFailure>
 where
     F: FnMut(&str) + Send,
 {
@@ -75,12 +116,16 @@ where
         .map_err(|e| StreamFailure::Network(e.to_string()))?;
 
     let url = format!("{}/chat/completions", cfg.base_url);
-    let body = serde_json::json!({
+    let mut body = json!({
         "model": cfg.model,
-        "messages": turns,
+        "messages": messages,
         "stream": true,
         "temperature": cfg.temperature,
     });
+    if let Some(tools) = tools {
+        body["tools"] = tools.clone();
+        body["tool_choice"] = json!("auto");
+    }
 
     let mut request = client.post(&url).json(&body);
     if let Some(key) = cfg.api_key.as_deref() {
@@ -105,6 +150,8 @@ where
 
     let mut stream = response.bytes_stream();
     let mut pending = String::new();
+    let mut reply = Reply::default();
+    let mut calls: BTreeMap<u64, ToolCall> = BTreeMap::new();
 
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
@@ -126,7 +173,8 @@ where
                 continue;
             }
             if data == "[DONE]" {
-                return Ok(());
+                reply.tool_calls = calls.into_values().collect();
+                return Ok(reply);
             }
 
             let Ok(payload) = serde_json::from_str::<Value>(data) else {
@@ -137,18 +185,49 @@ where
                 return Err(StreamFailure::Http(truncate(&error.to_string(), 320)));
             }
 
-            let delta = payload
+            if let Some(text) = payload
                 .pointer("/choices/0/delta/content")
-                .and_then(Value::as_str);
-
-            if let Some(text) = delta {
+                .and_then(Value::as_str)
+            {
                 if !text.is_empty() {
-                    out.push_str(text);
+                    reply.content.push_str(text);
                     on_delta(text);
+                }
+            }
+
+            if let Some(calls_delta) = payload
+                .pointer("/choices/0/delta/tool_calls")
+                .and_then(Value::as_array)
+            {
+                for (position, entry) in calls_delta.iter().enumerate() {
+                    let index = entry
+                        .get("index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(position as u64);
+                    let slot = calls.entry(index).or_default();
+                    if let Some(id) = entry.get("id").and_then(Value::as_str) {
+                        if !id.is_empty() {
+                            slot.id = id.to_string();
+                        }
+                    }
+                    if let Some(name) = entry.pointer("/function/name").and_then(Value::as_str) {
+                        // Providers either send the full name once or stream it,
+                        // but a few repeat it every chunk; never duplicate it.
+                        if slot.name.is_empty() {
+                            slot.name = name.to_string();
+                        } else if !slot.name.ends_with(name) && name != slot.name {
+                            slot.name.push_str(name);
+                        }
+                    }
+                    if let Some(args) = entry.pointer("/function/arguments").and_then(Value::as_str)
+                    {
+                        slot.arguments.push_str(args);
+                    }
                 }
             }
         }
     }
 
-    Ok(())
+    reply.tool_calls = calls.into_values().collect();
+    Ok(reply)
 }

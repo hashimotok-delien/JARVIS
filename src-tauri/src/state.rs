@@ -29,6 +29,8 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// Version that ran before this launch (set when the app was upgraded).
     pub previous_version: Mutex<Option<String>>,
+    /// Pending tool approvals awaiting a user decision.
+    pub approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
 }
 
 impl AppState {
@@ -40,6 +42,7 @@ impl AppState {
             quitting: AtomicBool::new(false),
             data_dir,
             previous_version: Mutex::new(None),
+            approvals: Mutex::new(HashMap::new()),
         }
     }
 }

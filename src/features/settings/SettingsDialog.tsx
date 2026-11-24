@@ -4,9 +4,13 @@ import {
   ArrowUp,
   ArrowUpCircle,
   Check,
+  Database,
+  Download,
   FolderOpen,
+  Plus,
   PlugZap,
   RefreshCw,
+  Trash2,
   X,
 } from "lucide-react";
 import { settingsStore, useSettings } from "./settingsStore";
@@ -15,6 +19,11 @@ import {
   launchUpdateInstaller,
   openUpdateDir,
 } from "../../lib/ipc/update";
+import {
+  backupDatabase,
+  exportAll,
+  getHudGeometry,
+} from "../../lib/ipc/assistant";
 import { logError } from "../../lib/logging";
 import { MicRecorder } from "../voice/recorder";
 import { voiceEngine } from "../voice/voiceEngine";
@@ -45,6 +54,7 @@ function toDraft(source: Settings): Settings {
       geminiBaseUrl: source.providers.geminiBaseUrl,
       ollamaModel: source.providers.ollamaModel,
       ollamaBaseUrl: source.providers.ollamaBaseUrl,
+      autoRoute: source.providers.autoRoute,
     },
     systemPrompt: source.systemPrompt,
     preferredName: source.preferredName,
@@ -54,8 +64,26 @@ function toDraft(source: Settings): Settings {
     stt: { ...source.stt },
     hud: { ...source.hud },
     startMinimized: source.startMinimized,
+    tools: {
+      ...source.tools,
+      mcpServers: source.tools.mcpServers.map((server) => ({
+        ...server,
+        args: [...server.args],
+      })),
+    },
+    memory: { ...source.memory },
+    ui: { ...source.ui },
   };
 }
+
+const EDGE_VOICES = [
+  ["ja-JP-NanamiNeural", "Nanami（女性・標準）"],
+  ["ja-JP-KeitaNeural", "Keita（男性・標準）"],
+  ["ja-JP-AoiNeural", "Aoi（女性・落ち着き）"],
+  ["ja-JP-MayuNeural", "Mayu（女性・明るい）"],
+  ["ja-JP-DaichiNeural", "Daichi（男性・低め）"],
+  ["ja-JP-NaokiNeural", "Naoki（男性・若め）"],
+];
 
 function Row({
   label,
@@ -274,12 +302,18 @@ export default function SettingsDialog({
     }
   };
 
-  const recordWakeSample = async () => {
+  const MAX_WAKE = 5;
+
+  /**
+   * Record `count` separate attempts. Each attempt is its own recording,
+   * and the working list keeps growing (fixes the old "always 1/5" bug).
+   */
+  const recordWakeSamples = async (count: number) => {
     if (!settings?.sttAvailable) {
       setMessage("whisper.cpp とモデルを設定してから登録してください");
       return;
     }
-    if (draft.stt.wakeSamples.length >= 5) {
+    if (draft.stt.wakeSamples.length >= MAX_WAKE) {
       setMessage("登録できる呼びかけ例は5件までです");
       return;
     }
@@ -290,38 +324,52 @@ export default function SettingsDialog({
 
     setBusy(true);
     setRecordingWake(true);
+    let samples = [...draft.stt.wakeSamples];
+    let step = 0;
+    let attempts = 0;
     try {
-      const captured = await captureWakePhrase(draft.stt.threshold);
-      if (!captured.audio || !captured.heardSpeech) {
-        setMessage("声を検出できませんでした。もう一度お試しください");
-        return;
+      while (step < count && samples.length < MAX_WAKE) {
+        if (attempts >= 12) {
+          setMessage("登録を中断しました。もう一度お試しください");
+          break;
+        }
+        attempts += 1;
+        const next = samples.length + 1;
+        setMessage(
+          `${next}回目: 「ジャービス」と呼びかけてください（${samples.length}/${MAX_WAKE} 登録済み）`,
+        );
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+
+        const captured = await captureWakePhrase(draft.stt.threshold);
+        if (!captured.audio || !captured.heardSpeech) {
+          setMessage(`${next}回目: 声を検出できませんでした。もう一度お試しください`);
+          continue;
+        }
+        const transcript = (
+          await transcribeWakeSample(captured.audio.base64, samples)
+        ).trim();
+        if (!transcript) {
+          setMessage(`${next}回目: 呼びかけを文字起こしできませんでした`);
+          continue;
+        }
+        if (
+          samples.some(
+            (sample) => normalizeWakeText(sample) === normalizeWakeText(transcript),
+          )
+        ) {
+          setMessage(`「${transcript}」は登録済みです。別の言い方でどうぞ`);
+          continue;
+        }
+
+        samples = [...samples, transcript].slice(0, MAX_WAKE);
+        setDraft((current) =>
+          current
+            ? { ...current, stt: { ...current.stt, wakeSamples: [...samples] } }
+            : current,
+        );
+        setMessage(`${samples.length}/${MAX_WAKE} 登録: ${transcript}`);
+        step += 1;
       }
-      const transcript = (
-        await transcribeWakeSample(
-          captured.audio.base64,
-          draft.stt.wakeSamples,
-        )
-      ).trim();
-      if (!transcript) {
-        setMessage("呼びかけを文字起こしできませんでした");
-        return;
-      }
-      const normalized = normalizeWakeText(transcript);
-      if (
-        draft.stt.wakeSamples.some(
-          (sample) => normalizeWakeText(sample) === normalized,
-        )
-      ) {
-        setMessage(`「${transcript}」は登録済みです`);
-        return;
-      }
-      patch({
-        stt: {
-          ...draft.stt,
-          wakeSamples: [...draft.stt.wakeSamples, transcript].slice(0, 5),
-        },
-      });
-      setMessage(`ウェイクワード候補を登録しました: ${transcript}`);
     } catch (error) {
       void logError("record_wake_sample", error);
       setMessage(`呼びかけ例を登録できませんでした: ${String(error)}`);
@@ -331,6 +379,9 @@ export default function SettingsDialog({
       setRecordingWake(false);
     }
   };
+
+  const recordWakeSample = () => recordWakeSamples(1);
+  const recordWakeBatch = () => recordWakeSamples(MAX_WAKE);
 
   const autoTuneThreshold = async () => {
     if (!voiceEngine.pauseForEnrollment()) {
@@ -361,6 +412,33 @@ export default function SettingsDialog({
       setBusy(false);
       setCalibratingThreshold(false);
     }
+  };
+
+  const applyHudPreset = (preset: string) => {
+    const margin = 24;
+    const width = draft.hud.width;
+    const height = draft.hud.height;
+    const availWidth = window.screen?.availWidth ?? 1920;
+    const availHeight = window.screen?.availHeight ?? 1080;
+    let x = draft.hud.positionX;
+    let y = draft.hud.positionY;
+    if (preset === "top-left") {
+      x = margin;
+      y = margin;
+    } else if (preset === "top-right") {
+      x = Math.max(0, availWidth - width - margin);
+      y = margin;
+    } else if (preset === "bottom-left") {
+      x = margin;
+      y = Math.max(0, availHeight - height - margin - 48);
+    } else if (preset === "bottom-right") {
+      x = Math.max(0, availWidth - width - margin);
+      y = Math.max(0, availHeight - height - margin - 48);
+    }
+    patch({
+      ui: { ...draft.ui, hudPreset: preset },
+      hud: { ...draft.hud, positionX: x, positionY: y },
+    });
   };
 
   const moveProvider = (index: number, delta: number) => {
@@ -434,6 +512,17 @@ export default function SettingsDialog({
                   })
                 }
                 className={INPUT_CLASS}
+              />
+            </Row>
+            <Row
+              label="モデル自動振り分け"
+              hint="短い質問はOllama、重い質問はクラウド"
+            >
+              <Switch
+                checked={draft.providers.autoRoute}
+                onChange={(autoRoute) =>
+                  patch({ providers: { ...draft.providers, autoRoute } })
+                }
               />
             </Row>
             <Row label="Ollama モデル">
@@ -594,6 +683,28 @@ export default function SettingsDialog({
               </select>
             </Row>
             <Row label="Edge ボイス">
+              <select
+                value={
+                  EDGE_VOICES.some(([id]) => id === draft.tts.voice)
+                    ? draft.tts.voice
+                    : "custom"
+                }
+                onChange={(event) => {
+                  if (event.target.value !== "custom") {
+                    patch({ tts: { ...draft.tts, voice: event.target.value } });
+                  }
+                }}
+                className={INPUT_CLASS}
+              >
+                {EDGE_VOICES.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+                <option value="custom">カスタム（下欄）</option>
+              </select>
+            </Row>
+            <Row label="Edge ボイスID" hint="任意">
               <input
                 value={draft.tts.voice}
                 onChange={(event) =>
@@ -639,6 +750,32 @@ export default function SettingsDialog({
                   })
                 }
                 className={`${INPUT_CLASS} w-[90px]`}
+              />
+            </Row>
+            <Row label="ピッチ（%）" hint="低いほど落ち着いた声">
+              <input
+                type="number"
+                min="-100"
+                max="100"
+                step="5"
+                value={draft.tts.pitch}
+                onChange={(event) =>
+                  patch({
+                    tts: { ...draft.tts, pitch: Number(event.target.value) },
+                  })
+                }
+                className={`${INPUT_CLASS} w-[90px]`}
+              />
+            </Row>
+            <Row
+              label="割り込み（バージイン）"
+              hint="発話中に話すと読み上げを止めます"
+            >
+              <Switch
+                checked={draft.tts.bargeIn}
+                onChange={(bargeIn) =>
+                  patch({ tts: { ...draft.tts, bargeIn } })
+                }
               />
             </Row>
           </Section>
@@ -747,26 +884,55 @@ export default function SettingsDialog({
                 }
               />
             </Row>
+            <Row
+              label="起動語の常時監視"
+              hint="待機中も短い音声を監視（CPU負荷あり）"
+            >
+              <Switch
+                checked={draft.stt.wakeWatch}
+                onChange={(wakeWatch) =>
+                  patch({ stt: { ...draft.stt, wakeWatch } })
+                }
+              />
+            </Row>
             <div className="space-y-2 border-t border-[var(--border-subtle)] pt-2">
+              <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                「ジャービス」と呼びかける録音を1回ずつ、または5回まとめて
+                行います。録音ごとに1件ずつ登録され、音声は保存せず文字起こし
+                だけを端末内に保存します。
+              </p>
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
-                  「ジャービス」と4～5回呼びかけて認識候補を登録します。
-                  音声は保存せず、文字起こしだけを端末内に保存します。
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void recordWakeSample()}
-                  disabled={
-                    busy ||
-                    !settings?.sttAvailable ||
-                    draft.stt.wakeSamples.length >= 5
-                  }
-                  className="shrink-0 rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
-                >
-                  {recordingWake
-                    ? "録音中..."
-                    : `呼びかけを録音 (${draft.stt.wakeSamples.length}/5)`}
-                </button>
+                <span className="text-[10px] text-[var(--text-secondary)]">
+                  登録数: {draft.stt.wakeSamples.length}/5
+                </span>
+                <span className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void recordWakeSample()}
+                    disabled={
+                      busy ||
+                      !settings?.sttAvailable ||
+                      draft.stt.wakeSamples.length >= 5
+                    }
+                    className="shrink-0 rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
+                  >
+                    {recordingWake ? "録音中..." : "1回録音"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void recordWakeBatch()}
+                    disabled={
+                      busy ||
+                      !settings?.sttAvailable ||
+                      draft.stt.wakeSamples.length >= 5
+                    }
+                    className="shrink-0 rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                  >
+                    {recordingWake
+                      ? "録音中..."
+                      : `5回まとめて録音 (${draft.stt.wakeSamples.length}/5)`}
+                  </button>
+                </span>
               </div>
               {draft.stt.wakeSamples.length > 0 && (
                 <ul className="space-y-1">
@@ -803,15 +969,394 @@ export default function SettingsDialog({
             </div>
           </Section>
 
-          <Section title="ウィンドウ">
-            <Row label="HUDを固定">
+          <Section title="ツール実行（Function Calling）">
+            <Row
+              label="ツール実行を有効化"
+              hint="モデルが必要に応じて検索・ファイル操作などを呼びます"
+            >
               <Switch
-                checked={draft.hud.pinned}
-                onChange={(pinned) =>
-                  patch({ hud: { ...draft.hud, pinned } })
+                checked={draft.tools.enabled}
+                onChange={(enabled) =>
+                  patch({ tools: { ...draft.tools, enabled } })
                 }
               />
             </Row>
+            <Row label="Web検索（DuckDuckGo）">
+              <Switch
+                checked={draft.tools.webSearch}
+                onChange={(webSearch) =>
+                  patch({ tools: { ...draft.tools, webSearch } })
+                }
+              />
+            </Row>
+            <Row label="アプリ起動 / URLを開く">
+              <Switch
+                checked={draft.tools.shell}
+                onChange={(shell) =>
+                  patch({ tools: { ...draft.tools, shell } })
+                }
+              />
+            </Row>
+            <Row label="ファイル読み書き">
+              <Switch
+                checked={draft.tools.files}
+                onChange={(files) =>
+                  patch({ tools: { ...draft.tools, files } })
+                }
+              />
+            </Row>
+            <Row label="クリップボード">
+              <Switch
+                checked={draft.tools.clipboard}
+                onChange={(clipboard) =>
+                  patch({ tools: { ...draft.tools, clipboard } })
+                }
+              />
+            </Row>
+            <Row label="スクリーンショット">
+              <Switch
+                checked={draft.tools.screenshot}
+                onChange={(screenshot) =>
+                  patch({ tools: { ...draft.tools, screenshot } })
+                }
+              />
+            </Row>
+            <Row label="タイマー / デスクトップ通知">
+              <Switch
+                checked={draft.tools.timers}
+                onChange={(timers) =>
+                  patch({ tools: { ...draft.tools, timers } })
+                }
+              />
+            </Row>
+            <Row label="実行前に確認" hint="書き込み・起動時に確認ダイアログ">
+              <Switch
+                checked={draft.tools.approval}
+                onChange={(approval) =>
+                  patch({ tools: { ...draft.tools, approval } })
+                }
+              />
+            </Row>
+
+            <div className="mt-2 space-y-2 border-t border-[var(--border-subtle)] pt-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+                  MCP サーバー（stdio）。引数はスペース区切り。
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    patch({
+                      tools: {
+                        ...draft.tools,
+                        mcpServers: [
+                          ...draft.tools.mcpServers,
+                          { name: "", command: "", args: [], enabled: true },
+                        ],
+                      },
+                    })
+                  }
+                  className="flex shrink-0 items-center gap-0.5 rounded border border-[var(--border-strong)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
+                >
+                  <Plus size={10} /> 追加
+                </button>
+              </div>
+              {draft.tools.mcpServers.map((server, index) => (
+                <div
+                  key={index}
+                  className="space-y-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-2"
+                >
+                  <div className="flex items-center gap-1">
+                    <input
+                      value={server.name}
+                      placeholder="名前"
+                      onChange={(event) => {
+                        const servers = draft.tools.mcpServers.map(
+                          (item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...item, name: event.target.value }
+                              : item,
+                        );
+                        patch({ tools: { ...draft.tools, mcpServers: servers } });
+                      }}
+                      className="w-[92px] rounded border border-[var(--border-subtle)] bg-[var(--bg-base)] px-1 py-0.5 text-[10px] outline-none select-text"
+                    />
+                    <input
+                      value={server.command}
+                      placeholder="command (例: npx)"
+                      onChange={(event) => {
+                        const servers = draft.tools.mcpServers.map(
+                          (item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...item, command: event.target.value }
+                              : item,
+                        );
+                        patch({ tools: { ...draft.tools, mcpServers: servers } });
+                      }}
+                      className="min-w-0 flex-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-base)] px-1 py-0.5 text-[10px] outline-none select-text"
+                    />
+                    <Switch
+                      checked={server.enabled}
+                      onChange={(enabled) => {
+                        const servers = draft.tools.mcpServers.map(
+                          (item, itemIndex) =>
+                            itemIndex === index ? { ...item, enabled } : item,
+                        );
+                        patch({ tools: { ...draft.tools, mcpServers: servers } });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patch({
+                          tools: {
+                            ...draft.tools,
+                            mcpServers: draft.tools.mcpServers.filter(
+                              (_, itemIndex) => itemIndex !== index,
+                            ),
+                          },
+                        })
+                      }
+                      className="text-[var(--text-muted)] hover:text-[var(--error)]"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                  <input
+                    value={server.args.join(" ")}
+                    placeholder="args（例: -y @modelcontextprotocol/server-filesystem C:\docs）"
+                    onChange={(event) => {
+                      const args = event.target.value
+                        .split(/\s+/)
+                        .map((arg) => arg.trim())
+                        .filter(Boolean);
+                      const servers = draft.tools.mcpServers.map(
+                        (item, itemIndex) =>
+                          itemIndex === index ? { ...item, args } : item,
+                      );
+                      patch({ tools: { ...draft.tools, mcpServers: servers } });
+                    }}
+                    className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-base)] px-1 py-0.5 text-[10px] outline-none select-text"
+                  />
+                </div>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="長期記憶">
+            <Row label="長期記憶を有効化">
+              <Switch
+                checked={draft.memory.enabled}
+                onChange={(enabled) =>
+                  patch({ memory: { ...draft.memory, enabled } })
+                }
+              />
+            </Row>
+            <Row label="応答に記憶を注入">
+              <Switch
+                checked={draft.memory.inject}
+                onChange={(inject) =>
+                  patch({ memory: { ...draft.memory, inject } })
+                }
+              />
+            </Row>
+            <Row
+              label="会話から自動抽出"
+              hint="数ターンごとに事実を記憶します"
+            >
+              <Switch
+                checked={draft.memory.autoExtract}
+                onChange={(autoExtract) =>
+                  patch({ memory: { ...draft.memory, autoExtract } })
+                }
+              />
+            </Row>
+            <Row label="長い会話を自動要約">
+              <Switch
+                checked={draft.memory.autoSummarize}
+                onChange={(autoSummarize) =>
+                  patch({ memory: { ...draft.memory, autoSummarize } })
+                }
+              />
+            </Row>
+            <Row label="注入する記憶の最大数">
+              <input
+                type="number"
+                min="0"
+                max="40"
+                value={draft.memory.maxItems}
+                onChange={(event) =>
+                  patch({
+                    memory: {
+                      ...draft.memory,
+                      maxItems: Number(event.target.value),
+                    },
+                  })
+                }
+                className={`${INPUT_CLASS} w-[90px]`}
+              />
+            </Row>
+            <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+              記憶の確認・編集は「記憶とテンプレート」から行えます。
+            </p>
+          </Section>
+
+          <Section title="表示 / クリップボード">
+            <Row label="テーマ">
+              <select
+                value={draft.ui.theme}
+                onChange={(event) =>
+                  patch({
+                    ui: {
+                      ...draft.ui,
+                      theme: event.target.value as "dark" | "light",
+                    },
+                  })
+                }
+                className={INPUT_CLASS}
+              >
+                <option value="dark">ダーク（HUD）</option>
+                <option value="light">ライト</option>
+              </select>
+            </Row>
+            <Row label="文字サイズ" hint={`${draft.ui.fontScale.toFixed(2)}x`}>
+              <input
+                type="range"
+                min="0.8"
+                max="1.4"
+                step="0.05"
+                value={draft.ui.fontScale}
+                onChange={(event) =>
+                  patch({
+                    ui: { ...draft.ui, fontScale: Number(event.target.value) },
+                  })
+                }
+                className="w-[150px]"
+              />
+            </Row>
+            <Row label="HUD 配置プリセット">
+              <select
+                value={draft.ui.hudPreset}
+                onChange={(event) => applyHudPreset(event.target.value)}
+                className={INPUT_CLASS}
+              >
+                <option value="custom">カスタム</option>
+                <option value="top-left">左上</option>
+                <option value="top-right">右上</option>
+                <option value="bottom-left">左下</option>
+                <option value="bottom-right">右下</option>
+              </select>
+            </Row>
+            <Row
+              label="クリップボードを監視"
+              hint="長いコピーを検知して要約を提案"
+            >
+              <Switch
+                checked={draft.ui.clipboardWatch}
+                onChange={(clipboardWatch) =>
+                  patch({ ui: { ...draft.ui, clipboardWatch } })
+                }
+              />
+            </Row>
+          </Section>
+
+          <Section title="データ">
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  void exportAll("markdown")
+                    .then((path) => setMessage(`書き出しました: ${path}`))
+                    .catch((error) => setMessage(`失敗: ${String(error)}`));
+                }}
+                className="flex items-center gap-1 rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
+              >
+                <Download size={10} /> 全スレッドを Markdown
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void exportAll("json")
+                    .then((path) => setMessage(`書き出しました: ${path}`))
+                    .catch((error) => setMessage(`失敗: ${String(error)}`));
+                }}
+                className="flex items-center gap-1 rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
+              >
+                <Download size={10} /> JSON
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void backupDatabase()
+                    .then((path) => setMessage(`バックアップ: ${path}`))
+                    .catch((error) => setMessage(`失敗: ${String(error)}`));
+                }}
+                className="flex items-center gap-1 rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
+              >
+                <Database size={10} /> DB バックアップ
+              </button>
+            </div>
+            <p className="pt-1 text-[10px] text-[var(--text-muted)]">
+              保存先: {settings?.dataDir ? `${settings.dataDir}\\exports` : "—"}
+            </p>
+          </Section>
+
+          <Section title="ウィンドウ">
+            <Row
+              label="HUDを固定"
+              hint="この位置で固定します"
+            >
+              <Switch
+                checked={draft.hud.pinned}
+                onChange={async (pinned) => {
+                  if (pinned) {
+                    const geometry = await getHudGeometry();
+                    if (geometry) {
+                      patch({
+                        hud: {
+                          ...draft.hud,
+                          pinned,
+                          positionX: geometry.x,
+                          positionY: geometry.y,
+                          width: geometry.width,
+                          height: geometry.height,
+                        },
+                        ui: { ...draft.ui, hudPreset: "custom" },
+                      });
+                      return;
+                    }
+                  }
+                  patch({ hud: { ...draft.hud, pinned } });
+                }}
+              />
+            </Row>
+            <div className="flex justify-end pb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void getHudGeometry().then((geometry) => {
+                    if (!geometry) {
+                      setMessage("HUD ウィンドウが見つかりません");
+                      return;
+                    }
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        positionX: geometry.x,
+                        positionY: geometry.y,
+                        width: geometry.width,
+                        height: geometry.height,
+                      },
+                      ui: { ...draft.ui, hudPreset: "custom" },
+                    });
+                    setMessage("現在のHUD位置を設定に反映しました");
+                  });
+                }}
+                className="rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+              >
+                現在のHUD位置を記憶
+              </button>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="flex items-center justify-between gap-2 text-[10px] text-[var(--text-secondary)]">
                 幅

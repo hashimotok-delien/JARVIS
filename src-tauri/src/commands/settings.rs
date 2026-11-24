@@ -18,7 +18,16 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<SettingsPayload, String> {
-    let settings = settings.sanitized();
+    let mut settings = settings.sanitized();
+    // "Fix HUD here": remember where the HUD currently sits when pinning.
+    if settings.hud.pinned {
+        if let Some((x, y, width, height)) = crate::commands::app::hud_geometry(&app) {
+            settings.hud.position_x = x;
+            settings.hud.position_y = y;
+            settings.hud.width = width;
+            settings.hud.height = height;
+        }
+    }
     {
         let conn = crate::commands::lock_db(&state)?;
         db::save_settings(&conn, &settings)?;

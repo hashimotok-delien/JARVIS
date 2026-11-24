@@ -4,7 +4,7 @@ import { settingsStore } from "../settings/settingsStore";
 import { MicRecorder } from "./recorder";
 import { TtsPlayer } from "./tts";
 import { reportVoiceState, transcribe } from "../../lib/ipc/voice";
-import { removeWakeWord } from "./wakeWord";
+import { containsWakeWord, removeWakeWord } from "./wakeWord";
 import { setHudPriority } from "../../lib/ipc/app";
 import {
   VOICE_TOGGLE,
@@ -70,6 +70,10 @@ class VoiceEngine {
   private enrollmentPaused = false;
   private hudForeground = false;
   private hudBackTimer: number | null = null;
+  private bargeTimer: number | null = null;
+  private bargeHits = 0;
+  private wakeWatchTimer: number | null = null;
+  private wakeWatchRunning = false;
 
   lastError: string | null = null;
   lastTranscript = "";
@@ -90,6 +94,8 @@ class VoiceEngine {
 
     this.enrollmentPaused = true;
     this.clearResume();
+    this.stopWakeWatch();
+    this.stopBargeMonitor();
     this.stopLoop();
     this.recorder.cancel();
     if (this.status === "listening") {
@@ -124,8 +130,12 @@ class VoiceEngine {
       void this.toggle();
     });
 
-    this.tts.onStart = () => this.setStatus("speaking");
+    this.tts.onStart = () => {
+      this.setStatus("speaking");
+      this.startBargeMonitor();
+    };
     this.tts.onIdle = () => {
+      this.stopBargeMonitor();
       if (this.status === "speaking") {
         this.setStatus("idle");
       }
@@ -159,6 +169,7 @@ class VoiceEngine {
       return;
     }
     if (this.status === "speaking") {
+      this.stopBargeMonitor();
       this.tts.stop();
       this.setStatus("idle");
       this.scheduleHandsFree();
@@ -211,6 +222,8 @@ class VoiceEngine {
 
   private async startListening() {
     if (this.status !== "idle" || this.enrollmentPaused) return;
+    this.stopWakeWatch();
+    this.stopBargeMonitor();
     const settings = settingsStore.get();
     if (!settings) return;
 
@@ -335,7 +348,7 @@ class VoiceEngine {
 
       this.lastTranscript = message;
       void publishVoiceTranscript(message, true);
-      await chatStore.send(message);
+      await chatStore.send(message, null, "voice");
     } catch (error) {
       this.lastError =
         error instanceof Error ? error.message : String(error);
@@ -399,11 +412,125 @@ class VoiceEngine {
     }
   }
 
+  /** Listen while speaking and stop playback when the user starts talking. */
+  private startBargeMonitor() {
+    const settings = settingsStore.get();
+    if (!settings?.tts.bargeIn || !settings.stt.enabled) return;
+    if (this.recorder.active) return;
+    this.stopBargeMonitor();
+
+    void this.recorder
+      .start()
+      .then(() => {
+        const threshold = Math.max(
+          0.02,
+          (settingsStore.get()?.stt.threshold ?? 0.02) * 2,
+        );
+        this.bargeHits = 0;
+        this.bargeTimer = window.setInterval(() => {
+          if (this.status !== "speaking") return;
+          if (this.recorder.level() >= threshold) {
+            this.bargeHits += 1;
+          } else {
+            this.bargeHits = Math.max(0, this.bargeHits - 1);
+          }
+          if (this.bargeHits >= 3) {
+            this.stopBargeMonitor();
+            this.tts.stop();
+            this.setStatus("idle");
+            void this.startListening();
+          }
+        }, 90);
+      })
+      .catch(() => undefined);
+  }
+
+  private stopBargeMonitor() {
+    if (this.bargeTimer !== null) {
+      window.clearInterval(this.bargeTimer);
+      this.bargeTimer = null;
+    }
+    this.bargeHits = 0;
+    if (this.status !== "listening") {
+      this.recorder.cancel();
+    }
+  }
+
+  /** Dedicated wake-word polling loop (short windows) while idle. */
+  private startWakeWatch() {
+    const settings = settingsStore.get();
+    if (
+      !settings?.stt.wakeWatch ||
+      !settings.stt.handsFree ||
+      this.status !== "idle" ||
+      this.enrollmentPaused ||
+      this.wakeWatchRunning
+    ) {
+      return;
+    }
+
+    this.wakeWatchRunning = true;
+    const loop = async () => {
+      const current = settingsStore.get();
+      if (
+        !current?.stt.wakeWatch ||
+        !current.stt.handsFree ||
+        this.status !== "idle" ||
+        this.enrollmentPaused
+      ) {
+        this.stopWakeWatch();
+        return;
+      }
+      if (this.recorder.active) {
+        this.wakeWatchTimer = window.setTimeout(loop, 300);
+        return;
+      }
+      try {
+        await this.recorder.start();
+        await new Promise((resolve) => window.setTimeout(resolve, 1800));
+        const recorded = await this.recorder.stop();
+        if (recorded && recorded.durationMs >= 700) {
+          const text = await transcribe(recorded.base64);
+          if (
+            text &&
+            containsWakeWord(text, current.stt.wakeSamples)
+          ) {
+            this.activateHud();
+            this.handsFreeActiveUntil =
+              performance.now() + current.stt.followUpMs;
+            this.stopWakeWatch();
+            await this.startListening();
+            return;
+          }
+        }
+      } catch (error) {
+        void logError("wake_watch", error);
+      }
+      if (this.wakeWatchRunning) {
+        this.wakeWatchTimer = window.setTimeout(loop, 250);
+      }
+    };
+    void loop();
+  }
+
+  private stopWakeWatch() {
+    this.wakeWatchRunning = false;
+    if (this.wakeWatchTimer !== null) {
+      window.clearTimeout(this.wakeWatchTimer);
+      this.wakeWatchTimer = null;
+    }
+  }
+
   private scheduleHandsFree() {
     const settings = settingsStore.get();
     if (!settings?.stt.handsFree) return;
     if (this.enrollmentPaused) return;
     if (this.status !== "idle") return;
+
+    if (settings.stt.wakeWatch) {
+      this.startWakeWatch();
+      return;
+    }
 
     this.clearResume();
     this.resumeTimer = window.setTimeout(() => {
@@ -433,6 +560,7 @@ class VoiceEngine {
   }
 
   stopSpeaking() {
+    this.stopBargeMonitor();
     this.tts.stop();
     if (this.status === "speaking") {
       this.setStatus("idle");

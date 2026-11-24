@@ -32,11 +32,12 @@ fn percent(value: i32) -> String {
     }
 }
 
-fn edge_options(voice: &str, rate: i32, volume: i32) -> SpeakOptions {
+fn edge_options(voice: &str, rate: i32, volume: i32, pitch: i32) -> SpeakOptions {
     SpeakOptions {
         voice: voice.to_owned(),
         rate: percent(rate.clamp(-100, 100)),
         volume: percent(volume.clamp(0, 100) - 100),
+        pitch: crate::models::pitch_to_hz(pitch),
         boundary: Boundary::Sentence,
         output_format: "audio-24khz-48kbitrate-mono-mp3".into(),
         ..SpeakOptions::default()
@@ -59,9 +60,15 @@ fn edge_client() -> Result<&'static EdgeTtsClient, String> {
         .map_err(Clone::clone)
 }
 
-async fn edge_tts(text: &str, voice: &str, rate: i32, volume: i32) -> Result<Vec<u8>, String> {
+async fn edge_tts(
+    text: &str,
+    voice: &str,
+    rate: i32,
+    volume: i32,
+    pitch: i32,
+) -> Result<Vec<u8>, String> {
     let client = edge_client()?;
-    let options = edge_options(voice, rate, volume);
+    let options = edge_options(voice, rate, volume, pitch);
     let result = tokio::time::timeout(
         Duration::from_secs(60),
         client.synthesize(text.to_owned(), options),
@@ -145,6 +152,7 @@ pub async fn synthesize(settings: &Settings, text: &str) -> Result<AudioPayload,
             &settings.tts.voice,
             settings.tts.rate,
             settings.tts.volume,
+            settings.tts.pitch,
         )
         .await
         {
@@ -202,10 +210,11 @@ mod tests {
 
     #[test]
     fn edge_options_validate_and_map_full_volume_to_default() {
-        let options = edge_options("ja-JP-KeitaNeural", 0, 100);
+        let options = edge_options("ja-JP-KeitaNeural", 0, 100, 0);
 
         assert!(options.validate().is_ok());
         assert_eq!(options.volume, "+0%");
+        assert_eq!(options.pitch, "+0Hz");
         assert_eq!(options.output_format, "audio-24khz-48kbitrate-mono-mp3");
     }
 }

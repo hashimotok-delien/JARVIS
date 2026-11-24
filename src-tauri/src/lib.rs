@@ -7,6 +7,7 @@ mod providers;
 mod secrets;
 mod speech;
 mod state;
+mod tools;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -198,6 +199,14 @@ fn register_shortcuts(app: &AppHandle) {
             Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH),
             "Ctrl+Alt+H（HUD）",
         ),
+        (
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyQ),
+            "Ctrl+Alt+Q（クイック入力）",
+        ),
+        (
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyS),
+            "Ctrl+Alt+S（選択テキストをJARVISへ）",
+        ),
     ];
 
     // A conflicting shortcut must never prevent the app from starting.
@@ -217,7 +226,49 @@ pub fn run() {
     install_panic_logger();
     install_tls_crypto_provider();
 
+    // Open the database and register the state *before* the app runs so
+    // window scripts can never invoke a command before `manage()`.
+    let data_dir = paths::resolve_data_dir_headless();
+    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        log_message("ERROR", "startup", &format!("create data dir: {error}"));
+    }
+    let conn = db::open(&data_dir.join("jarvis.db")).or_else(|error| {
+        log_message(
+            "ERROR",
+            "startup",
+            &format!("open database, trying recovery file: {error}"),
+        );
+        db::open(&data_dir.join("jarvis-recovery.db")).or_else(|error| {
+            log_message(
+                "ERROR",
+                "startup",
+                &format!("recovery database failed, using memory: {error}"),
+            );
+            db::open_memory()
+        })
+    });
+    let conn = match conn {
+        Ok(conn) => conn,
+        Err(error) => {
+            log_message("ERROR", "startup", &format!("no database available: {error}"));
+            return;
+        }
+    };
+
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let previous_version =
+        read_version_file(&data_dir).filter(|version| version != &current_version);
+    if let Err(error) = std::fs::write(data_dir.join("version.txt"), &current_version) {
+        log_message("ERROR", "startup", &format!("version.txt: {error}"));
+    }
+
+    let state = AppState::new(conn, data_dir);
+    if let Ok(mut slot) = state.previous_version.lock() {
+        *slot = previous_version;
+    }
+
     let result = tauri::Builder::default()
+        .manage(state)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             commands::app::show_main(app);
         }))
@@ -230,8 +281,22 @@ pub fn run() {
                     }
                     if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::Space) {
                         events::emit(app, events::VOICE_TOGGLE, "toggle".to_string());
-                    } else {
+                    } else if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::KeyH) {
                         commands::app::toggle_hud_window(app);
+                    } else if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::KeyQ) {
+                        commands::app::toggle_quick_window(app);
+                    } else if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::KeyS) {
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let text = tauri::async_runtime::spawn_blocking(
+                                commands::tools::capture_selection,
+                            )
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
+                            .unwrap_or_default();
+                            commands::app::open_quick_window(&handle, Some(text));
+                        });
                     }
                 })
                 .build(),
@@ -264,6 +329,7 @@ pub fn run() {
             commands::app::report_voice_state,
             commands::app::toggle_mute,
             commands::app::apply_hud_settings,
+            commands::app::get_hud_geometry,
             commands::app::show_main_window,
             commands::threads::list_threads,
             commands::threads::create_thread,
@@ -281,29 +347,39 @@ pub fn run() {
             commands::voice::transcribe,
             commands::voice::transcribe_wake_sample,
             commands::voice::speak,
+            commands::app::toggle_quick,
+            commands::app::show_quick_palette,
+            commands::app::show_quick_window,
+            commands::memory::list_memories,
+            commands::memory::add_memory,
+            commands::memory::update_memory,
+            commands::memory::delete_memory,
+            commands::memory::summarize_thread,
+            commands::memory::daily_digest,
+            commands::data::search_messages,
+            commands::data::truncate_from_message,
+            commands::data::branch_thread,
+            commands::data::usage_stats,
+            commands::data::list_templates,
+            commands::data::add_template,
+            commands::data::delete_template,
+            commands::data::export_all,
+            commands::data::backup_database,
+            commands::tools::read_clipboard_text,
+            commands::tools::write_clipboard_text,
+            commands::tools::capture_screen_image,
+            commands::tools::resolve_tool_approval,
+            commands::tools::notify_desktop,
+            commands::tools::set_timer_now,
+            commands::tools::capture_selection,
+            commands::tools::transcribe_audio_file,
             commands::update::check_update,
             commands::update::launch_update_installer,
             commands::update::open_update_dir,
         ])
         .setup(|app| {
             let handle = app.handle();
-
-            let data_dir = paths::resolve_data_dir(handle);
-            std::fs::create_dir_all(&data_dir)?;
-            let conn = db::open(&data_dir.join("jarvis.db")).map_err(std::io::Error::other)?;
-
             let current_version = env!("CARGO_PKG_VERSION").to_string();
-            let previous_version =
-                read_version_file(&data_dir).filter(|version| version != &current_version);
-            if let Err(error) = std::fs::write(data_dir.join("version.txt"), &current_version) {
-                log_message("ERROR", "startup", &format!("version.txt: {error}"));
-            }
-
-            let state = AppState::new(conn, data_dir);
-            if let Ok(mut slot) = state.previous_version.lock() {
-                *slot = previous_version;
-            }
-            app.manage(state);
 
             apply_window_icons(app);
             setup_tray(app)?;

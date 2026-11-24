@@ -4,7 +4,6 @@
 //! so the install folder stays predictable and uninstalling can keep data.
 
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 
 fn is_writable(dir: &Path) -> bool {
     if std::fs::create_dir_all(dir).is_err() {
@@ -26,7 +25,10 @@ fn exe_usr_dir() -> Option<PathBuf> {
 }
 
 /// Directory that stores the database, exports and logs.
-pub fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
+///
+/// Resolved without an `AppHandle` so the database can be opened and
+/// managed on the builder, before any window script can invoke commands.
+pub fn resolve_data_dir_headless() -> PathBuf {
     if let Some(custom) = std::env::var_os("JARVIS_DATA_DIR") {
         let path = PathBuf::from(custom);
         if is_writable(&path) {
@@ -40,10 +42,10 @@ pub fn resolve_data_dir(app: &tauri::AppHandle) -> PathBuf {
         }
     }
 
-    let fallback = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("jarvis"));
+    let fallback = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("com.monster2408.jarvis");
     let _ = std::fs::create_dir_all(&fallback);
     fallback
 }

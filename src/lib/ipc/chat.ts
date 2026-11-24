@@ -42,9 +42,16 @@ export async function listMessages(threadId: string): Promise<ChatMessage[]> {
 export async function sendMessage(
   threadId: string,
   content: string,
+  imageBase64?: string | null,
+  source?: "voice" | "quick" | null,
 ): Promise<SendAck | null> {
   if (!isTauri) return null;
-  return invoke<SendAck>("send_message", { threadId, content });
+  return invoke<SendAck>("send_message", {
+    threadId,
+    content,
+    imageBase64: imageBase64 ?? null,
+    source: source ?? null,
+  });
 }
 
 export async function stopGeneration(requestId: string): Promise<void> {

@@ -1,7 +1,7 @@
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, State};
 
 use crate::db;
-use crate::events::{self, VoiceState};
+use crate::events::{self, QuickPrompt, VoiceState};
 use crate::models::Settings;
 use crate::state::AppState;
 
@@ -41,6 +41,41 @@ fn send_hud_to_back(_hud: &tauri::WebviewWindow) -> Result<(), String> {
 pub struct AppInfo {
     pub name: String,
     pub version: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HudGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Current HUD position/size in logical pixels (None if the window is gone).
+pub fn hud_geometry(app: &AppHandle) -> Option<(i32, i32, u32, u32)> {
+    let hud = app.get_webview_window("hud")?;
+    let scale = hud.scale_factor().ok()?;
+    let position = hud.outer_position().ok()?.to_logical::<f64>(scale);
+    let size = hud.outer_size().ok()?.to_logical::<f64>(scale);
+    Some((
+        position.x.round() as i32,
+        position.y.round() as i32,
+        size.width.round().max(1.0) as u32,
+        size.height.round().max(1.0) as u32,
+    ))
+}
+
+#[tauri::command]
+pub fn get_hud_geometry(app: AppHandle) -> Result<HudGeometry, String> {
+    let (x, y, width, height) =
+        hud_geometry(&app).ok_or_else(|| "HUD ウィンドウが見つかりません".to_string())?;
+    Ok(HudGeometry {
+        x,
+        y,
+        width,
+        height,
+    })
 }
 
 #[tauri::command]
@@ -109,6 +144,48 @@ pub fn toggle_hud_window(app: &AppHandle) -> bool {
     }
 }
 
+pub fn toggle_quick_window(app: &AppHandle) -> bool {
+    let Some(quick) = app.get_webview_window("quick") else {
+        return false;
+    };
+    match quick.is_visible() {
+        Ok(true) => {
+            let _ = quick.hide();
+            false
+        }
+        _ => {
+            let _ = quick.show();
+            let _ = quick.set_focus();
+            true
+        }
+    }
+}
+
+pub fn open_quick_window(app: &AppHandle, prompt: Option<String>) {
+    if let Some(quick) = app.get_webview_window("quick") {
+        let _ = quick.show();
+        let _ = quick.set_focus();
+    }
+    if let Some(text) = prompt.filter(|text| !text.trim().is_empty()) {
+        events::emit(app, events::QUICK_PROMPT, QuickPrompt { text });
+    }
+}
+
+#[tauri::command]
+pub fn show_quick_palette(app: AppHandle) {
+    open_quick_window(&app, None);
+}
+
+#[tauri::command]
+pub fn show_quick_window(app: AppHandle, prompt: Option<String>) {
+    open_quick_window(&app, prompt);
+}
+
+#[tauri::command]
+pub fn toggle_quick(app: AppHandle) -> bool {
+    toggle_quick_window(&app)
+}
+
 pub fn toggle_mute_impl(app: &AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
     let settings = {
@@ -147,15 +224,17 @@ pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
         )) {
             crate::log_message("ERROR", "window", &format!("position HUD: {error}"));
         }
-        if let Err(error) = hud.set_always_on_top(!settings.hud.pinned) {
+        // Pinning keeps the HUD at the saved position and on top of
+        // other windows instead of dropping it behind the desktop.
+        if let Err(error) = hud.set_always_on_top(true) {
             crate::log_message("ERROR", "window", &format!("set HUD priority: {error}"));
         }
         if settings.hud.pinned {
             if let Err(error) = hud.show() {
                 crate::log_message("ERROR", "window", &format!("show pinned HUD: {error}"));
             }
-            if let Err(error) = send_hud_to_back(&hud) {
-                crate::log_message("ERROR", "window", &format!("send HUD to back: {error}"));
+            if let Err(error) = hud.set_focus() {
+                crate::log_message("ERROR", "window", &format!("focus pinned HUD: {error}"));
             }
         }
     }
@@ -171,6 +250,15 @@ pub fn set_hud_priority(app: AppHandle, foreground: bool) -> Result<(), String> 
     let hud = app
         .get_webview_window("hud")
         .ok_or_else(|| "HUD ウィンドウが見つかりません".to_string())?;
+
+    if settings.hud.pinned {
+        // Fixed HUD: stay visible at the pinned spot, never drop behind.
+        hud.set_always_on_top(true)
+            .map_err(|error| format!("HUDを前面にできません: {error}"))?;
+        hud.show()
+            .map_err(|error| format!("HUDを表示できません: {error}"))?;
+        return Ok(());
+    }
 
     if foreground {
         hud.set_always_on_top(true)

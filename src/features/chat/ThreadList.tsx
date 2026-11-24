@@ -59,8 +59,30 @@ export default function ThreadList({
     setDraft("");
   };
 
+  const moveSelection = (delta: number) => {
+    if (filtered.length === 0) return;
+    const index = filtered.findIndex((thread) => thread.id === activeId);
+    const next = filtered[Math.min(
+      filtered.length - 1,
+      Math.max(0, (index < 0 ? 0 : index) + delta),
+    )];
+    if (next) onSelect(next.id);
+  };
+
   return (
-    <aside className="flex min-h-0 w-[264px] shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)]">
+    <aside
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          moveSelection(1);
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          moveSelection(-1);
+        }
+      }}
+      className="flex min-h-0 w-[264px] shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] outline-none"
+    >
       <div className="flex items-center gap-2 px-3 pt-3">
         <div className="relative flex-1">
           <Search

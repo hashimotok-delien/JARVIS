@@ -28,3 +28,29 @@
   --glow-accent: 0 0 12px rgba(0, 229, 255, 0.45);
   --shadow-panel: 0 18px 40px rgba(0, 0, 0, 0.45);
 }
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: #f2f6fb;
+  --bg-panel: #ffffff;
+  --bg-elevated: #f7fafd;
+  --bg-hover: #e8eff7;
+
+  --border-subtle: #dbe4ee;
+  --border-strong: #c3d0df;
+
+  --accent: #007fa3;
+  --accent-bright: #0096bf;
+  --accent-dim: #b7e6f2;
+  --warn: #b45309;
+  --error: #d92d20;
+  --ok: #067647;
+
+  --text-primary: #101828;
+  --text-secondary: #475467;
+  --text-muted: #667085;
+
+  --glow-accent: 0 0 10px rgba(0, 127, 163, 0.25);
+  --shadow-panel: 0 18px 40px rgba(16, 24, 40, 0.12);
+}

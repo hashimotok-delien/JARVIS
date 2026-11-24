@@ -1,7 +1,7 @@
 {
-  "version": "0.2.1",
+  "version": "0.3.0",
   "releasedAt": "2026-11-25",
-  "notes": "Rustls暗号プロバイダーの選択を修正し、TLS利用時のpanicを防止",
-  "installer": "JARVIS_0.2.1_x64-setup.exe",
+  "notes": "全文検索・長期記憶・ツール実行(MCP/承認)・クイック入力・使用量統計を追加。起動時クラッシュとHUD固定/ウェイクワード登録を修正",
+  "installer": "JARVIS_0.3.0_x64-setup.exe",
   "url": ""
 }

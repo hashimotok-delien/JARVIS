@@ -7,8 +7,11 @@ use crate::state::AppState;
 
 pub mod app;
 pub mod chat;
+pub mod data;
+pub mod memory;
 pub mod settings;
 pub mod threads;
+pub mod tools;
 pub mod update;
 pub mod voice;
 

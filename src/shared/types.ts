@@ -6,6 +6,65 @@ export interface Thread {
   pinned: boolean;
   createdAt: number;
   updatedAt: number;
+  summary?: string | null;
+  summaryUpto?: number;
+}
+
+export interface Memory {
+  id: string;
+  content: string;
+  kind: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  body: string;
+  createdAt: number;
+}
+
+export interface SearchHit {
+  messageId: string;
+  threadId: string;
+  threadTitle: string;
+  role: Role;
+  snippet: string;
+  createdAt: number;
+}
+
+export interface UsageBucket {
+  requests: number;
+  characters: number;
+  avgLatencyMs: number;
+}
+
+export interface ProviderUsage {
+  provider: string;
+  model: string;
+  requests: number;
+  characters: number;
+  avgLatencyMs: number;
+}
+
+export interface UsageStats {
+  today: UsageBucket;
+  week: UsageBucket;
+  all: UsageBucket;
+  byProvider: ProviderUsage[];
+}
+
+export interface CapturedImage {
+  base64: string;
+  path: string;
+}
+
+export interface HudGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface ChatMessage {
@@ -35,6 +94,7 @@ export interface ProviderSettings {
   geminiBaseUrl: string;
   ollamaModel: string;
   ollamaBaseUrl: string;
+  autoRoute: boolean;
 }
 
 export interface TtsSettings {
@@ -44,6 +104,8 @@ export interface TtsSettings {
   sapiVoice: string;
   rate: number;
   volume: number;
+  pitch: number;
+  bargeIn: boolean;
 }
 
 export interface SttSettings {
@@ -56,6 +118,41 @@ export interface SttSettings {
   handsFree: boolean;
   wakeSamples: string[];
   followUpMs: number;
+  wakeWatch: boolean;
+}
+
+export interface McpServer {
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+}
+
+export interface ToolSettings {
+  enabled: boolean;
+  webSearch: boolean;
+  shell: boolean;
+  files: boolean;
+  clipboard: boolean;
+  screenshot: boolean;
+  timers: boolean;
+  approval: boolean;
+  mcpServers: McpServer[];
+}
+
+export interface MemorySettings {
+  enabled: boolean;
+  autoExtract: boolean;
+  inject: boolean;
+  maxItems: number;
+  autoSummarize: boolean;
+}
+
+export interface UiSettings {
+  theme: "dark" | "light";
+  fontScale: number;
+  hudPreset: string;
+  clipboardWatch: boolean;
 }
 
 export interface HudSettings {
@@ -78,6 +175,9 @@ export interface Settings {
   stt: SttSettings;
   hud: HudSettings;
   startMinimized: boolean;
+  tools: ToolSettings;
+  memory: MemorySettings;
+  ui: UiSettings;
 }
 
 export interface SettingsPayload extends Settings {
@@ -172,4 +272,25 @@ export interface VoiceStateEvent {
 export interface VoiceTranscriptEvent {
   text: string;
   isFinal: boolean;
+}
+
+export interface ToolApprovalEvent {
+  id: string;
+  tool: string;
+  summary: string;
+}
+
+export interface ToolStatusEvent {
+  name: string;
+  state: "running" | "ok" | "error" | "denied";
+  detail?: string | null;
+}
+
+export interface TimerFiredEvent {
+  label: string;
+  seconds: number;
+}
+
+export interface QuickPromptEvent {
+  text: string;
 }

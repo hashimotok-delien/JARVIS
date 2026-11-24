@@ -18,6 +18,7 @@ import {
   CHAT_TITLE,
   onEvent,
 } from "../../lib/ipc/events";
+import { branchThread, truncateFromMessage } from "../../lib/ipc/assistant";
 import { isTauri } from "../../lib/ipc/app";
 import { logError } from "../../lib/logging";
 import type {
@@ -334,7 +335,11 @@ class ChatStore {
     }
   }
 
-  async send(text: string): Promise<void> {
+  async send(
+    text: string,
+    imageBase64?: string | null,
+    source?: "voice" | "quick" | null,
+  ): Promise<void> {
     const content = text.trim();
     if (!content) return;
     const threadId = this.snapshot.activeThreadId;
@@ -349,7 +354,7 @@ class ChatStore {
     this.patch({ error: null, streaming: true });
 
     try {
-      const ack = await sendMessage(threadId, content);
+      const ack = await sendMessage(threadId, content, imageBase64, source);
       if (!ack) {
         this.patch({ streaming: false });
         return;
@@ -428,6 +433,66 @@ class ChatStore {
     if (requestId && isTauri) {
       await stopGeneration(requestId);
     }
+  }
+
+  private indexOfMessage(messageId: string): number {
+    for (let index = this.snapshot.messages.length - 1; index >= 0; index -= 1) {
+      if (this.snapshot.messages[index].id === messageId) return index;
+    }
+    return -1;
+  }
+
+  /** Re-run the last exchange: drop the reply and the prompt, then resend. */
+  async regenerate(): Promise<void> {
+    if (this.snapshot.streaming) return;
+    const threadId = this.snapshot.activeThreadId;
+    if (!threadId) return;
+    let index = this.snapshot.messages.length - 1;
+    while (index >= 0 && this.snapshot.messages[index].role !== "user") {
+      index -= 1;
+    }
+    if (index < 0) return;
+    const lastUser = this.snapshot.messages[index];
+
+    if (isTauri) {
+      await truncateFromMessage(threadId, lastUser.id);
+    }
+    this.patch({
+      messages: this.snapshot.messages.slice(0, index),
+      error: null,
+    });
+    await this.send(lastUser.content);
+  }
+
+  async editAndResend(
+    messageId: string,
+    content: string,
+    imageBase64?: string | null,
+  ): Promise<void> {
+    if (this.snapshot.streaming) return;
+    const threadId = this.snapshot.activeThreadId;
+    const index = this.indexOfMessage(messageId);
+    if (!threadId || index < 0) return;
+
+    if (isTauri) {
+      await truncateFromMessage(threadId, messageId);
+    }
+    this.patch({
+      messages: this.snapshot.messages.slice(0, index),
+      error: null,
+    });
+    await this.send(content, imageBase64);
+  }
+
+  /** Fork the conversation into a new thread at the given message. */
+  async branch(messageId: string): Promise<string | null> {
+    const threadId = this.snapshot.activeThreadId;
+    if (!threadId || !isTauri) return null;
+    const thread = await branchThread(threadId, messageId);
+    if (!thread) return null;
+    await this.reloadThreads(false);
+    await this.selectThread(thread.id);
+    return thread.id;
   }
 }
 

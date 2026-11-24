@@ -19,6 +19,67 @@ pub struct Thread {
     pub pinned: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub summary_upto: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Memory {
+    pub id: String,
+    pub content: String,
+    pub kind: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub message_id: String,
+    pub thread_id: String,
+    pub thread_title: String,
+    pub role: String,
+    pub snippet: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBucket {
+    pub requests: i64,
+    pub characters: i64,
+    pub avg_latency_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsage {
+    pub provider: String,
+    pub model: String,
+    pub requests: i64,
+    pub characters: i64,
+    pub avg_latency_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageStats {
+    pub today: UsageBucket,
+    pub week: UsageBucket,
+    pub all: UsageBucket,
+    pub by_provider: Vec<ProviderUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +107,8 @@ pub struct ProviderSettings {
     pub gemini_base_url: String,
     pub ollama_model: String,
     pub ollama_base_url: String,
+    /// Route short/simple prompts to the local model and heavy ones to cloud.
+    pub auto_route: bool,
 }
 
 impl Default for ProviderSettings {
@@ -56,6 +119,7 @@ impl Default for ProviderSettings {
             gemini_base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
             ollama_model: "qwen2.5:7b-instruct".into(),
             ollama_base_url: "http://127.0.0.1:11434".into(),
+            auto_route: false,
         }
     }
 }
@@ -72,6 +136,10 @@ pub struct TtsSettings {
     pub rate: i32,
     /// Volume in percent (0..100).
     pub volume: i32,
+    /// Pitch in percent (-100..100), mapped to edge-tts Hz.
+    pub pitch: i32,
+    /// Stop speaking as soon as the microphone detects the user.
+    pub barge_in: bool,
 }
 
 impl Default for TtsSettings {
@@ -83,6 +151,8 @@ impl Default for TtsSettings {
             sapi_voice: String::new(),
             rate: 0,
             volume: 100,
+            pitch: 0,
+            barge_in: true,
         }
     }
 }
@@ -105,6 +175,8 @@ pub struct SttSettings {
     pub wake_samples: Vec<String>,
     /// Seconds to keep listening for a follow-up in hands-free mode.
     pub follow_up_ms: u32,
+    /// Continuously poll short audio windows for the wake word while idle.
+    pub wake_watch: bool,
 }
 
 impl Default for SttSettings {
@@ -119,6 +191,7 @@ impl Default for SttSettings {
             hands_free: false,
             wake_samples: Vec::new(),
             follow_up_ms: 12_000,
+            wake_watch: false,
         }
     }
 }
@@ -149,6 +222,102 @@ impl Default for HudSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub enabled: bool,
+}
+
+impl Default for McpServer {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            command: String::new(),
+            args: Vec::new(),
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ToolSettings {
+    /// Master switch for function calling.
+    pub enabled: bool,
+    pub web_search: bool,
+    pub shell: bool,
+    pub files: bool,
+    pub clipboard: bool,
+    pub screenshot: bool,
+    pub timers: bool,
+    /// Ask the user before risky tool calls (write_file, launch_app, open_url).
+    pub approval: bool,
+    pub mcp_servers: Vec<McpServer>,
+}
+
+impl Default for ToolSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            web_search: true,
+            shell: true,
+            files: true,
+            clipboard: true,
+            screenshot: true,
+            timers: true,
+            approval: true,
+            mcp_servers: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MemorySettings {
+    pub enabled: bool,
+    pub auto_extract: bool,
+    pub inject: bool,
+    pub max_items: usize,
+    pub auto_summarize: bool,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_extract: false,
+            inject: true,
+            max_items: 12,
+            auto_summarize: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UiSettings {
+    /// "dark" or "light".
+    pub theme: String,
+    pub font_scale: f32,
+    /// "custom" | "top-left" | "top-right" | "bottom-left" | "bottom-right".
+    pub hud_preset: String,
+    pub clipboard_watch: bool,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            theme: "dark".into(),
+            font_scale: 1.0,
+            hud_preset: "custom".into(),
+            clipboard_watch: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -161,6 +330,9 @@ pub struct Settings {
     pub stt: SttSettings,
     pub hud: HudSettings,
     pub start_minimized: bool,
+    pub tools: ToolSettings,
+    pub memory: MemorySettings,
+    pub ui: UiSettings,
 }
 
 impl Default for Settings {
@@ -175,6 +347,9 @@ impl Default for Settings {
             stt: SttSettings::default(),
             hud: HudSettings::default(),
             start_minimized: false,
+            tools: ToolSettings::default(),
+            memory: MemorySettings::default(),
+            ui: UiSettings::default(),
         }
     }
 }
@@ -216,6 +391,56 @@ impl Settings {
         }
         self.tts.rate = self.tts.rate.clamp(-100, 100);
         self.tts.volume = self.tts.volume.clamp(0, 100);
+        self.tts.pitch = self.tts.pitch.clamp(-100, 100);
+        if self.tts.voice.trim().is_empty() {
+            self.tts.voice = TtsSettings::default().voice;
+        }
+        self.tts.voice = self
+            .tts
+            .voice
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(80)
+            .collect();
+        self.ui.font_scale = self.ui.font_scale.clamp(0.8, 1.4);
+        if self.ui.theme != "light" {
+            self.ui.theme = "dark".into();
+        }
+        if !matches!(
+            self.ui.hud_preset.as_str(),
+            "top-left" | "top-right" | "bottom-left" | "bottom-right"
+        ) {
+            self.ui.hud_preset = "custom".into();
+        }
+        self.memory.max_items = self.memory.max_items.clamp(0, 40);
+        self.tools.mcp_servers = std::mem::take(&mut self.tools.mcp_servers)
+            .into_iter()
+            .filter_map(|server| {
+                let name: String = server
+                    .name
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .take(32)
+                    .collect();
+                let command = server.command.trim().to_string();
+                if name.is_empty() || command.is_empty() {
+                    return None;
+                }
+                Some(McpServer {
+                    name,
+                    command,
+                    args: server
+                        .args
+                        .into_iter()
+                        .map(|arg| arg.trim().to_string())
+                        .filter(|arg| !arg.is_empty())
+                        .take(16)
+                        .collect(),
+                    enabled: server.enabled,
+                })
+            })
+            .take(8)
+            .collect();
         self.stt.silence_ms = self.stt.silence_ms.clamp(200, 5000);
         self.stt.threshold = self.stt.threshold.clamp(0.002, 0.4);
         let mut wake_samples = Vec::new();
@@ -251,6 +476,16 @@ impl Settings {
             "{}\nユーザーを「{}」とお呼びください。",
             self.system_prompt, self.preferred_name
         )
+    }
+}
+
+/// Approximate edge-tts pitch value ("+0Hz"): percent mapped to Hz.
+pub fn pitch_to_hz(value: i32) -> String {
+    let hz = (value.clamp(-100, 100) as f32 * 1.6).round() as i32;
+    if hz >= 0 {
+        format!("+{hz}Hz")
+    } else {
+        format!("{hz}Hz")
     }
 }
 
@@ -293,6 +528,42 @@ mod tests {
                 .system_prompt_for_chat()
                 .ends_with("ユーザーを「アレックス」とお呼びください。")
         );
+    }
+
+    #[test]
+    fn settings_round_trip_new_sections() {
+        let settings = Settings {
+            tools: ToolSettings {
+                enabled: true,
+                mcp_servers: vec![McpServer {
+                    name: "fs".into(),
+                    command: "npx".into(),
+                    args: vec!["-y".into(), "server".into()],
+                    enabled: true,
+                }],
+                ..ToolSettings::default()
+            },
+            memory: MemorySettings {
+                auto_extract: true,
+                max_items: 20,
+                ..MemorySettings::default()
+            },
+            ui: UiSettings {
+                theme: "light".into(),
+                font_scale: 1.2,
+                ..UiSettings::default()
+            },
+            ..Settings::default()
+        }
+        .sanitized();
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let parsed: Settings = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.tools.enabled);
+        assert_eq!(parsed.tools.mcp_servers[0].name, "fs");
+        assert_eq!(parsed.memory.max_items, 20);
+        assert_eq!(parsed.ui.theme, "light");
     }
 
     #[test]

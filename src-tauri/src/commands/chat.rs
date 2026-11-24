@@ -44,6 +44,8 @@ pub async fn send_message(
     state: State<'_, AppState>,
     thread_id: String,
     content: String,
+    image_base64: Option<String>,
+    source: Option<String>,
 ) -> Result<SendAck, String> {
     let content = content.trim().to_string();
     if content.is_empty() {
@@ -79,25 +81,56 @@ pub async fn send_message(
         }
 
         let settings = db::load_settings(&conn);
+        let memory = crate::commands::memory::memory_context(&conn, &settings);
+        let thread = db::get_thread(&conn, &thread_id)?;
+        let summary = thread
+            .as_ref()
+            .and_then(|thread| thread.summary.clone())
+            .unwrap_or_default();
+        let summary_upto = thread.map(|thread| thread.summary_upto).unwrap_or(0);
+
         let mut history = previous;
         history.push(user_message.clone());
 
-        let start = history.len().saturating_sub(settings.max_history);
-        let mut turns = vec![ChatTurn {
-            role: "system".into(),
-            content: settings.system_prompt_for_chat(),
-        }];
-        for message in &history[start..] {
+        let mut system = settings.system_prompt_for_chat();
+        if !summary.trim().is_empty() {
+            system.push_str(&format!("\n\n【このスレッドの要約】\n{summary}"));
+        }
+        if !memory.trim().is_empty() {
+            system.push_str(&format!("\n\n{memory}"));
+        }
+
+        let filtered: Vec<&Message> = history
+            .iter()
+            .filter(|message| message.created_at > summary_upto)
+            .collect();
+        let start = filtered.len().saturating_sub(settings.max_history);
+        let mut turns = vec![ChatTurn::new("system", system)];
+        for message in &filtered[start..] {
             if message.content.trim().is_empty() {
                 continue;
             }
             if message.role != "user" && message.role != "assistant" {
                 continue;
             }
-            turns.push(ChatTurn {
-                role: message.role.clone(),
-                content: message.content.clone(),
-            });
+            turns.push(ChatTurn::new(message.role.clone(), message.content.clone()));
+        }
+
+        if let Some(image) = image_base64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let url = if image.starts_with("data:") {
+                image.to_string()
+            } else {
+                format!("data:image/png;base64,{image}")
+            };
+            if let Some(last) = turns.last_mut() {
+                if last.role == "user" {
+                    last.images.push(url);
+                }
+            }
         }
         (settings, turns, user_message, title_update)
     };
@@ -130,6 +163,7 @@ pub async fn send_message(
         thread_id: thread_id.clone(),
         message_id: assistant_id.clone(),
         turns,
+        prefer_local: source.as_deref() == Some("voice"),
     };
 
     let app_handle = app.clone();

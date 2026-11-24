@@ -11,6 +11,41 @@ pub const CHAT_TITLE: &str = "chat://title";
 pub const VOICE_STATE: &str = "voice://state";
 pub const VOICE_TOGGLE: &str = "voice://toggle";
 pub const SETTINGS_CHANGED: &str = "settings://changed";
+pub const TOOL_APPROVAL: &str = "tool://approval";
+pub const TOOL_STATUS: &str = "tool://status";
+pub const TIMER_FIRED: &str = "timer://fired";
+pub const MEMORY_UPDATED: &str = "memory://updated";
+pub const QUICK_PROMPT: &str = "quick://prompt";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolApprovalRequest {
+    pub id: String,
+    pub tool: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolStatus {
+    pub name: String,
+    /// "running" | "ok" | "error" | "denied".
+    pub state: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimerFired {
+    pub label: String,
+    pub seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPrompt {
+    pub text: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
