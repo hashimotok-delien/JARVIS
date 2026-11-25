@@ -152,7 +152,7 @@ npm run tauri build
 ```
 
 - 単体 exe: `src-tauri/target/release/jarvis.exe`
-- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.4.0_x64-setup.exe`
+- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.4.1_x64-setup.exe`
 
 ## インストール
 
@@ -197,9 +197,9 @@ v0.2.0より前のアプリはリポジトリ内フォルダを確認しない�
 最初のv0.2.0への更新だけはインストーラを手動で実行してください。
 
 1. `latest.json` の `version` を新バージョンにし、`installer` にインストーラのファイル名を書く
-2. 同じフォルダにインストーラ（例: `JARVIS_0.4.0_x64-setup.exe`）を置く
+2. 同じフォルダにインストーラ（例: `JARVIS_0.4.1_x64-setup.exe`）を置く
 3. アプリ再起動（または設定 → アップデート → 再確認）
-4. ヘッダーに「更新 v0.4.0」が出る → 設定 → 「インストーラを起動」
+4. ヘッダーに「更新 v0.4.1」が出る → 設定 → 「インストーラを起動」
 
 インストーラ起動時にアプリは自動終了し、更新後は `usr` のデータを引き継いで再起動できます。
 更新後は初回起動時に前回と現在のバージョンを通知します。

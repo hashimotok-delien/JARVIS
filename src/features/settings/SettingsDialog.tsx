@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -375,7 +375,7 @@ export default function SettingsDialog({
     setMessage("登録を中断しました");
   };
 
-  const finishWakeEnrollment = useCallback(async (samples: string[]) => {
+  const finishWakeEnrollment = async (samples: string[]) => {
     setEnrolling(false);
     voiceEngine.resumeAfterEnrollment();
     const base = draftRef.current;
@@ -399,7 +399,7 @@ export default function SettingsDialog({
     } finally {
       setBusy(false);
     }
-  }, []);
+  };
 
   const autoTuneThreshold = async () => {
     if (!voiceEngine.pauseForEnrollment()) {

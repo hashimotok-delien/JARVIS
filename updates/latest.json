@@ -1,7 +1,7 @@
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "releasedAt": "2026-11-25",
-  "notes": "音声認識をspeech.cpp + Haas-ja-v1.0に刷新（常駐ワーカー・カスタム語彙）。モデル/実行ファイルの取得ボタンとエンジン切替を追加",
-  "installer": "JARVIS_0.4.0_x64-setup.exe",
+  "notes": "設定画面を開くと真っ暗になる不具合を修正（フックの呼び出し順）",
+  "installer": "JARVIS_0.4.1_x64-setup.exe",
   "url": ""
 }
