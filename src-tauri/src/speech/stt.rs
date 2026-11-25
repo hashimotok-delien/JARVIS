@@ -320,75 +320,126 @@ fn is_degenerate_transcript(text: &str) -> bool {
     most * 100 / chars.len() >= 60
 }
 
-pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {
-    let engine = active_engine(app, settings);
-    // Clean up the audio before any engine sees it (noise gate + AGC).
-    let processed = if settings.stt.denoise || settings.stt.normalize {
-        match crate::speech::dsp::process_wav(wav, settings.stt.denoise, settings.stt.normalize) {
-            Ok(bytes) => Some(bytes),
-            Err(error) => {
-                crate::log_message("WARN", "stt", &format!("dsp failed: {error}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let wav: &[u8] = processed.as_deref().unwrap_or(wav);
-    let result = match engine {
-        "speech" => match transcribe_speech(app, settings, wav) {
-            Ok(text) => Ok(text),
-            Err(error) => {
-                crate::log_message("WARN", "stt", &format!("speech engine failed: {error}"));
-                if whisper_ready(app, settings) {
-                    transcribe_whisper(app, settings, wav)
-                } else {
-                    Err(error)
-                }
-            }
-        },
+fn run_engine(
+    app: &AppHandle,
+    settings: &Settings,
+    wav: &[u8],
+    engine: &str,
+) -> Result<String, String> {
+    match engine {
+        "speech" => transcribe_speech(app, settings, wav),
         "whisper" => transcribe_whisper(app, settings, wav),
         _ => Err(
             "音声認識エンジンがありません。設定で speech.exe か whisper-cli.exe を指定してください。"
                 .to_string(),
         ),
-    };
+    }
+}
 
-    // Recording-quality diagnostics: a very low peak means the wrong input
-    // device (or a muted mic) was captured, which the model turns into
-    // meaningless filler.
-    if let Ok(text) = &result {
-        let peak = wav_pcm(wav)
-            .map(|(pcm, _)| {
-                pcm.chunks_exact(2)
-                    .map(|frame| i16::from_le_bytes([frame[0], frame[1]]).unsigned_abs())
-                    .max()
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
-        let preview: String = text.chars().take(80).collect();
+pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {
+    let engine = active_engine(app, settings);
+
+    // Preprocess once so every engine and retry sees the same cleaned audio.
+    let (wav_buffer, metrics) = if settings.stt.denoise || settings.stt.normalize {
+        match crate::speech::dsp::process_wav(
+            wav,
+            settings.stt.denoise,
+            settings.stt.normalize,
+            &settings.stt.denoise_engine,
+        ) {
+            Ok((bytes, metrics)) => (bytes, Some(metrics)),
+            Err(error) => {
+                crate::log_message("WARN", "stt", &format!("dsp failed: {error}"));
+                (
+                    wav.to_vec(),
+                    crate::speech::dsp::wav_metrics(wav).ok(),
+                )
+            }
+        }
+    } else {
+        (
+            wav.to_vec(),
+            crate::speech::dsp::wav_metrics(wav).ok(),
+        )
+    };
+    let wav = wav_buffer.as_slice();
+    if let Some(metrics) = metrics {
         crate::log_message(
             "DEBUG",
             "stt",
-            &format!(
-                "engine={engine} wav_bytes={} peak={peak} text={preview}",
-                wav.len()
-            ),
+            &format!("engine={engine} {}", metrics.summary()),
         );
-        if is_degenerate_transcript(text) {
+    }
+
+    let mut used = engine;
+    let mut result = run_engine(app, settings, wav, engine);
+    if result.is_err() && engine == "speech" && whisper_ready(app, settings) {
+        crate::log_message("WARN", "stt", "speech failed; retrying with whisper");
+        used = "whisper";
+        result = run_engine(app, settings, wav, "whisper");
+    }
+
+    let low_quality = match &result {
+        Err(_) => true,
+        Ok(text) => {
+            text.trim().is_empty()
+                || is_degenerate_transcript(text)
+                || metrics
+                    .map(|metrics| {
+                        metrics.duration_ms >= 500 && metrics.speech_ratio < 0.06
+                    })
+                    .unwrap_or(false)
+        }
+    };
+    if low_quality {
+        let alternate = match used {
+            "speech" if whisper_ready(app, settings) => Some("whisper"),
+            "whisper" if speech_ready(app, settings) => Some("speech"),
+            _ => None,
+        };
+        if let Some(alternate) = alternate {
             crate::log_message(
                 "WARN",
                 "stt",
-                &format!("degenerate transcript rejected (engine={engine})"),
+                &format!("low quality result from {used}; retrying with {alternate}"),
             );
-            return Err(
-                "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
-                    .to_string(),
-            );
+            if let Ok(text) = run_engine(app, settings, wav, alternate) {
+                if !text.trim().is_empty() && !is_degenerate_transcript(&text) {
+                    used = alternate;
+                    result = Ok(text);
+                }
+            }
         }
     }
 
-    result
+    match result {
+        Ok(text) if !text.trim().is_empty() => {
+            let preview: String = text.chars().take(80).collect();
+            crate::log_message(
+                "DEBUG",
+                "stt",
+                &format!("engine={used} text={preview}"),
+            );
+            if is_degenerate_transcript(&text) {
+                crate::log_message(
+                    "WARN",
+                    "stt",
+                    &format!("degenerate transcript rejected (engine={used})"),
+                );
+                Err(
+                    "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
+                        .to_string(),
+                )
+            } else {
+                Ok(text)
+            }
+        }
+        Ok(_) => Err(
+            "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
+                .to_string(),
+        ),
+        Err(error) => Err(error),
+    }
 }
 
 fn transcribe_speech(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {

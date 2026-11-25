@@ -216,6 +216,8 @@ pub struct SttSettings {
     pub wake_watch: bool,
     /// High-pass/low-pass filtering plus a noise gate before recognition.
     pub denoise: bool,
+    /// "rnnoise" (neural) or "classic" (filters + gate).
+    pub denoise_engine: String,
     /// Loudness normalization (AGC) before recognition.
     pub normalize: bool,
 }
@@ -240,6 +242,7 @@ impl Default for SttSettings {
             follow_up_ms: 12_000,
             wake_watch: false,
             denoise: true,
+            denoise_engine: "rnnoise".into(),
             normalize: true,
         }
     }
@@ -623,6 +626,9 @@ impl Settings {
         }
         self.stt.wake_samples = wake_samples;
         self.stt.follow_up_ms = self.stt.follow_up_ms.clamp(0, 60_000);
+        if self.stt.denoise_engine != "classic" {
+            self.stt.denoise_engine = "rnnoise".into();
+        }
         self.hud.opacity = self.hud.opacity.clamp(0.2, 1.0);
         self.hud.width = self.hud.width.clamp(380, 1920);
         self.hud.height = self.hud.height.clamp(208, 1080);

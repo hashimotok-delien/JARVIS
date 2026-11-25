@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     followUpMs: 12000,
     wakeWatch: false,
     denoise: true,
+    denoiseEngine: "rnnoise",
     normalize: true,
   },
   hud: {

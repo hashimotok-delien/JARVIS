@@ -129,6 +129,7 @@ export interface SttSettings {
   followUpMs: number;
   wakeWatch: boolean;
   denoise: boolean;
+  denoiseEngine: "rnnoise" | "classic";
   normalize: boolean;
 }
 

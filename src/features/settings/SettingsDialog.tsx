@@ -1328,6 +1328,28 @@ export default function SettingsDialog({
               />
             </Row>
             <Row
+              label="ノイズ除去エンジン"
+              hint="RNNoiseは高品質、簡易は軽量"
+            >
+              <select
+                value={draft.stt.denoiseEngine}
+                onChange={(event) =>
+                  patch({
+                    stt: {
+                      ...draft.stt,
+                      denoiseEngine: event.target.value as
+                        | "rnnoise"
+                        | "classic",
+                    },
+                  })
+                }
+                className={INPUT_CLASS}
+              >
+                <option value="rnnoise">RNNoise（推奨）</option>
+                <option value="classic">簡易フィルタ＋ゲート</option>
+              </select>
+            </Row>
+            <Row
               label="音量の一定化（前処理）"
               hint="小さい声を自動で持ち上げ、大きすぎる声を抑えます"
             >
