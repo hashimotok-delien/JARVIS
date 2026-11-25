@@ -18,6 +18,7 @@ src-tauri/binaries/*
 
 # local release artifacts
 updates/*.exe
+updates/*.zip
 
 
 # Editor directories and files

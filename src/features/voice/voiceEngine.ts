@@ -68,6 +68,8 @@ class VoiceEngine {
   private lastObservedThreadId: string | null = null;
   private spokenChars = 0;
   private handsFreeActiveUntil = 0;
+  /** True only after a wake-only prompt, so the answer needs no wake word. */
+  private allowFollowUp = false;
   private enrollmentPaused = false;
   private hudForeground = false;
   private hudBackTimer: number | null = null;
@@ -119,6 +121,7 @@ class VoiceEngine {
       const settings = settingsStore.get();
       if (!settings?.stt.handsFree) {
         this.handsFreeActiveUntil = 0;
+        this.allowFollowUp = false;
         this.clearResume();
         return;
       }
@@ -137,6 +140,15 @@ class VoiceEngine {
     };
     this.tts.onIdle = () => {
       this.stopBargeMonitor();
+      if (this.allowFollowUp) {
+        // The assistant only asked "what do you need?" — keep the short window.
+        const settings = settingsStore.get();
+        this.handsFreeActiveUntil =
+          performance.now() + (settings?.stt.followUpMs ?? 12_000);
+      } else {
+        // A real answer finished: the next turn must start with the wake word.
+        this.handsFreeActiveUntil = 0;
+      }
       if (this.status === "speaking") {
         this.setStatus("idle");
       }
@@ -175,6 +187,8 @@ class VoiceEngine {
     if (this.status === "speaking") {
       this.stopBargeMonitor();
       this.tts.stop();
+      this.allowFollowUp = false;
+      this.handsFreeActiveUntil = 0;
       this.setStatus("idle");
       this.scheduleHandsFree();
       return;
@@ -259,6 +273,14 @@ class VoiceEngine {
     const settings = settingsStore.get();
     if (!settings) return;
 
+    if (
+      this.allowFollowUp &&
+      this.handsFreeActiveUntil > 0 &&
+      performance.now() >= this.handsFreeActiveUntil
+    ) {
+      this.allowFollowUp = false;
+    }
+
     const level = this.recorder.level();
     void publishVoiceSpectrum(this.recorder.spectrum());
     if (level >= settings.stt.threshold) {
@@ -335,10 +357,13 @@ class VoiceEngine {
           if (!message) {
             this.lastTranscript = "";
             void publishVoiceTranscript("", true);
+            // Only this prompt allows the next answer without the wake word.
+            this.allowFollowUp = true;
             this.tts.enqueue(
               `${settings.preferredName}様、ご要件はなんでしょうか？`,
             );
             this.setStatus("idle");
+            this.scheduleHandsFree();
             return;
           }
         } else {
@@ -354,6 +379,8 @@ class VoiceEngine {
 
       this.lastTranscript = message;
       void publishVoiceTranscript(message, true);
+      // After a real answer the next turn must start with the wake word.
+      this.allowFollowUp = false;
       await chatStore.send(message, null, "voice");
     } catch (error) {
       this.lastError =
@@ -378,6 +405,9 @@ class VoiceEngine {
     this.pumpTts(snapshot);
 
     if (!snapshot.streaming && this.status === "thinking" && !this.tts.busy) {
+      if (!this.allowFollowUp) {
+        this.handsFreeActiveUntil = 0;
+      }
       this.setStatus("idle");
       this.scheduleHandsFree();
     }
