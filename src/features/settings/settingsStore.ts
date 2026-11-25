@@ -4,6 +4,7 @@ import {
   getSettings,
   saveSettings,
   setGeminiKey,
+  setOpencodeKey,
   testProviders,
 } from "../../lib/ipc/settings";
 import { SETTINGS_CHANGED, onEvent } from "../../lib/ipc/events";
@@ -66,6 +67,12 @@ class SettingsStore {
 
   async updateKey(key: string | null): Promise<SettingsPayload> {
     const payload = await setGeminiKey(key);
+    this.set(payload);
+    return payload;
+  }
+
+  async updateOpencodeKey(key: string | null): Promise<SettingsPayload> {
+    const payload = await setOpencodeKey(key);
     this.set(payload);
     return payload;
   }

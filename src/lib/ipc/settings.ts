@@ -8,12 +8,15 @@ import { isTauri } from "./app";
 
 export const DEFAULT_SETTINGS: SettingsPayload = {
   providers: {
-    order: ["gemini", "ollama"],
+    order: ["gemini", "ollama", "opencode"],
     geminiModel: "gemini-2.5-flash",
     geminiBaseUrl:
       "https://generativelanguage.googleapis.com/v1beta/openai",
     ollamaModel: "qwen2.5:7b-instruct",
     ollamaBaseUrl: "http://127.0.0.1:11434",
+    opencodeBaseUrl: "http://127.0.0.1:3000/v1",
+    opencodeModel: "deepseek-v4.1-flash",
+    opencodeHeavyModel: "deepseek-v4.1-pro",
     autoRoute: false,
   },
   systemPrompt: "",
@@ -37,6 +40,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     speechPath: "",
     speechModel: "haas-ja-v1.0",
     speechDevice: "auto",
+    inputDeviceId: "",
     speechKeywords: true,
     whisperPath: "",
     modelPath: "",
@@ -87,6 +91,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     pollSeconds: 60,
   },
   hasGeminiKey: false,
+  hasOpencodeKey: false,
   sttAvailable: false,
   sttDetail: "バックエンド未接続",
   dbPath: "",
@@ -111,6 +116,13 @@ export async function setGeminiKey(
 ): Promise<SettingsPayload> {
   if (!isTauri) return DEFAULT_SETTINGS;
   return invoke<SettingsPayload>("set_gemini_key", { key });
+}
+
+export async function setOpencodeKey(
+  key: string | null,
+): Promise<SettingsPayload> {
+  if (!isTauri) return DEFAULT_SETTINGS;
+  return invoke<SettingsPayload>("set_opencode_key", { key });
 }
 
 export async function testProviders(): Promise<ProviderCheck[]> {

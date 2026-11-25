@@ -1,7 +1,7 @@
 {
-  "version": "0.4.1",
+  "version": "0.4.3",
   "releasedAt": "2026-11-25",
-  "notes": "設定画面を開くと真っ暗になる不具合を修正（フックの呼び出し順）",
-  "installer": "JARVIS_0.4.1_x64-setup.exe",
+  "notes": "トレイ/タスクバーの状態色インジケーター、OpenCode Goプロバイダ対応、設定画面を左目次＋2ペイン化",
+  "installer": "JARVIS_0.4.3_x64-setup.exe",
   "url": ""
 }

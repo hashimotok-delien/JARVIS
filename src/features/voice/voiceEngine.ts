@@ -9,6 +9,7 @@ import { setHudPriority } from "../../lib/ipc/app";
 import {
   VOICE_TOGGLE,
   onEvent,
+  publishVoiceSpectrum,
   publishVoiceTranscript,
 } from "../../lib/ipc/events";
 import { logError } from "../../lib/logging";
@@ -141,6 +142,9 @@ class VoiceEngine {
       }
       this.scheduleHandsFree();
     };
+    this.tts.onSpectrum = (values) => {
+      void publishVoiceSpectrum(values);
+    };
 
     const settings = settingsStore.get();
     if (settings?.tts.enabled) {
@@ -233,7 +237,7 @@ class VoiceEngine {
     }
 
     try {
-      await this.recorder.start();
+      await this.recorder.start(settings.stt.inputDeviceId);
     } catch (error) {
       this.lastError = String(error);
       void logError("voice_recorder_start", error);
@@ -256,6 +260,7 @@ class VoiceEngine {
     if (!settings) return;
 
     const level = this.recorder.level();
+    void publishVoiceSpectrum(this.recorder.spectrum());
     if (level >= settings.stt.threshold) {
       if (performance.now() < this.handsFreeActiveUntil) {
         if (!this.hudForeground) this.activateHud();
@@ -288,6 +293,7 @@ class VoiceEngine {
     this.inflight = true;
 
     const recorded = await this.recorder.stop();
+    void publishVoiceSpectrum(this.recorder.spectrum());
     const tooShort =
       !recorded ||
       recorded.durationMs < 400 ||
@@ -363,6 +369,12 @@ class VoiceEngine {
 
   private onChatChange() {
     const snapshot = chatStore.getSnapshot();
+
+    // Reflect typed chat generation in the HUD/tray indicator too.
+    if (snapshot.streaming && this.status === "idle" && !this.enrollmentPaused) {
+      this.setStatus("thinking");
+    }
+
     this.pumpTts(snapshot);
 
     if (!snapshot.streaming && this.status === "thinking" && !this.tts.busy) {
@@ -486,7 +498,7 @@ class VoiceEngine {
         return;
       }
       try {
-        await this.recorder.start();
+        await this.recorder.start(current.stt.inputDeviceId);
         await new Promise((resolve) => window.setTimeout(resolve, 1800));
         const recorded = await this.recorder.stop();
         if (recorded && recorded.durationMs >= 700) {

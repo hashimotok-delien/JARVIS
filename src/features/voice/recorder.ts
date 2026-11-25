@@ -97,24 +97,45 @@ export class MicRecorder {
     return this.startedAt ? performance.now() - this.startedAt : 0;
   }
 
-  async start(): Promise<void> {
+  async start(deviceId?: string): Promise<void> {
     if (this.context) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("この環境ではマイクを利用できません");
     }
 
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    const audio: MediaTrackConstraints = {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    if (deviceId && deviceId.trim()) {
+      audio.deviceId = { exact: deviceId.trim() };
+    }
+
+    const fallback: MediaTrackConstraints = {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio });
+    } catch (error) {
+      // The saved device may have been unplugged or renamed.
+      if (!audio.deviceId) throw error;
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: fallback,
+      });
+    }
 
     const context = new AudioContext();
     this.context = context;
     this.sampleRate = context.sampleRate;
+    // WebView2 can start the context suspended, which would record silence.
+    if (context.state === "suspended") {
+      await context.resume().catch(() => undefined);
+    }
 
     const source = context.createMediaStreamSource(this.stream);
     const analyser = context.createAnalyser();
@@ -150,6 +171,28 @@ export class MicRecorder {
       sum += data[i] * data[i];
     }
     return Math.sqrt(sum / data.length);
+  }
+
+  /**
+   * Frequency levels (0..1) for the HUD waveform while the user speaks.
+   * Only the lower quarter of the spectrum is sampled; voice energy lives
+   * there and the upper bands would leave the ring looking flat.
+   */
+  spectrum(bars = 32): number[] {
+    const values = new Array<number>(bars).fill(0);
+    if (!this.analyser) return values;
+    const data = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.getByteFrequencyData(data);
+    const usable = Math.max(bars, Math.floor(data.length / 4));
+    const step = Math.max(1, Math.floor(usable / bars));
+    for (let i = 0; i < bars; i += 1) {
+      let sum = 0;
+      for (let j = 0; j < step; j += 1) {
+        sum += data[i * step + j] ?? 0;
+      }
+      values[i] = Math.min(1, (sum / step / 255) * 1.9);
+    }
+    return values;
   }
 
   /** Stop capture and return the encoded WAV recording. */

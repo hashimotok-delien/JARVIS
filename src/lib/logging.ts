@@ -5,6 +5,15 @@ type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.stack ?? error.message;
   if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    // DOMException and MediaError are not JSON-serializable (their fields are
+    // non-enumerable), which used to log as a useless "{}".
+    const detail = error as { name?: unknown; message?: unknown };
+    if (typeof detail.message === "string" && detail.message) {
+      const name = typeof detail.name === "string" ? detail.name : "Error";
+      return `${name}: ${detail.message}`;
+    }
+  }
   try {
     return JSON.stringify(error) ?? String(error);
   } catch {

@@ -124,6 +124,11 @@ pub struct ProviderSettings {
     pub gemini_base_url: String,
     pub ollama_model: String,
     pub ollama_base_url: String,
+    /// OpenCode Go server (OpenAI-compatible base, e.g. http://host:3000/v1).
+    pub opencode_base_url: String,
+    pub opencode_model: String,
+    /// Heavier model used for coding/analysis prompts when auto-routing.
+    pub opencode_heavy_model: String,
     /// Route short/simple prompts to the local model and heavy ones to cloud.
     pub auto_route: bool,
 }
@@ -131,11 +136,14 @@ pub struct ProviderSettings {
 impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
-            order: vec!["gemini".into(), "ollama".into()],
+            order: vec!["gemini".into(), "ollama".into(), "opencode".into()],
             gemini_model: "gemini-2.5-flash".into(),
             gemini_base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
             ollama_model: "qwen2.5:7b-instruct".into(),
             ollama_base_url: "http://127.0.0.1:11434".into(),
+            opencode_base_url: "http://127.0.0.1:3000/v1".into(),
+            opencode_model: "deepseek-v4.1-flash".into(),
+            opencode_heavy_model: "deepseek-v4.1-pro".into(),
             auto_route: false,
         }
     }
@@ -187,6 +195,8 @@ pub struct SttSettings {
     pub speech_model: String,
     /// "auto", "gpu" or "cpu".
     pub speech_device: String,
+    /// Microphone device id; empty selects the system default input.
+    pub input_device_id: String,
     /// Feed enrolled wake phrases to Haas as a custom vocabulary.
     pub speech_keywords: bool,
     /// Absolute or relative path to whisper-cli.exe.
@@ -215,6 +225,7 @@ impl Default for SttSettings {
             speech_path: String::new(),
             speech_model: String::new(),
             speech_device: "auto".into(),
+            input_device_id: String::new(),
             speech_keywords: true,
             whisper_path: String::new(),
             model_path: String::new(),
@@ -433,7 +444,7 @@ impl Settings {
         }
         self.providers
             .order
-            .retain(|id| id == "gemini" || id == "ollama");
+            .retain(|id| id == "gemini" || id == "ollama" || id == "opencode");
         if self.providers.order.is_empty() {
             self.providers.order = ProviderSettings::default().order;
         }
@@ -441,6 +452,31 @@ impl Settings {
             self.providers.gemini_base_url.trim_end_matches('/').into();
         self.providers.ollama_base_url =
             self.providers.ollama_base_url.trim_end_matches('/').into();
+        self.providers.opencode_base_url =
+            self.providers.opencode_base_url.trim_end_matches('/').into();
+        if self.providers.opencode_base_url.trim().is_empty() {
+            self.providers.opencode_base_url =
+                ProviderSettings::default().opencode_base_url;
+        }
+        for model in [
+            &mut self.providers.opencode_model,
+            &mut self.providers.opencode_heavy_model,
+        ] {
+            *model = model
+                .chars()
+                .filter(|character| !character.is_control())
+                .take(80)
+                .collect::<String>()
+                .trim()
+                .to_string();
+        }
+        if self.providers.opencode_model.is_empty() {
+            self.providers.opencode_model = ProviderSettings::default().opencode_model;
+        }
+        if self.providers.opencode_heavy_model.is_empty() {
+            self.providers.opencode_heavy_model =
+                ProviderSettings::default().opencode_heavy_model;
+        }
         if self.tts.engine != "sapi" {
             self.tts.engine = "edge".into();
         }
@@ -512,6 +548,15 @@ impl Settings {
         if !matches!(self.stt.speech_device.as_str(), "gpu" | "cpu") {
             self.stt.speech_device = "auto".into();
         }
+        self.stt.input_device_id = self
+            .stt
+            .input_device_id
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(256)
+            .collect::<String>()
+            .trim()
+            .to_string();
         self.stt.speech_path = clean_path(&self.stt.speech_path);
         self.stt.speech_model = clean_path(&self.stt.speech_model);
         if self.stt.speech_model.is_empty() {
@@ -530,12 +575,10 @@ impl Settings {
                 .collect::<String>()
                 .trim()
                 .to_string();
-            if !sample.is_empty()
-                && wake_samples.len() < 5
-                && !wake_samples
-                    .iter()
-                    .any(|existing: &String| existing.eq_ignore_ascii_case(&sample))
-            {
+            // Keep every enrollment attempt (up to 5) so the registered count
+            // matches what the user recorded. Duplicates are collapsed later,
+            // only when building the ASR keyword prompt.
+            if !sample.is_empty() && wake_samples.len() < 5 {
                 wake_samples.push(sample);
             }
         }
@@ -573,6 +616,7 @@ pub struct SettingsPayload {
     #[serde(flatten)]
     pub settings: Settings,
     pub has_gemini_key: bool,
+    pub has_opencode_key: bool,
     pub stt_available: bool,
     pub stt_detail: String,
     pub db_path: String,

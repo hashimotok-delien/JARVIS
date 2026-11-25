@@ -71,7 +71,7 @@ pub async fn run_stream(
             } else {
                 call.id.clone()
             };
-            calls_json.push(json!({
+            let mut call_json = json!({
                 "id": id,
                 "type": "function",
                 "function": {
@@ -82,8 +82,28 @@ pub async fn run_stream(
                         call.arguments.clone()
                     },
                 }
-            }));
+            });
+            // Gemini rejects follow-up turns whose functionCall parts lost the
+            // thought_signature it returned, so echo it back untouched.
+            if let Some(extra) = &call.extra_content {
+                call_json["extra_content"] = extra.clone();
+            }
+            calls_json.push(call_json);
         }
+
+        let signatures = reply
+            .tool_calls
+            .iter()
+            .filter(|call| call.extra_content.is_some())
+            .count();
+        crate::log_message(
+            "DEBUG",
+            "agent",
+            &format!(
+                "round {_round}: {} tool call(s), {signatures} with thought_signature",
+                reply.tool_calls.len()
+            ),
+        );
 
         messages.push(json!({
             "role": "assistant",

@@ -25,7 +25,7 @@ npm install
 アプリの設定（歯車アイコン）→ プロバイダ → **Gemini API キー** を保存してください。
 
 - キーは Windows DPAPI で暗号化して保存されます
-  （`%APPDATA%\com.monster2408.jarvis\jarvis.db`）
+  （`%APPDATA%\com.hashimotok0808.jarvis\jarvis.db`）
 - 「接続テスト」で Gemini / Ollama の疎通を確認できます
 
 ### 2. Ollama（ローカルLLM）
@@ -152,7 +152,7 @@ npm run tauri build
 ```
 
 - 単体 exe: `src-tauri/target/release/jarvis.exe`
-- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.4.1_x64-setup.exe`
+- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.4.3_x64-setup.exe`
 
 ## インストール
 
@@ -179,7 +179,7 @@ JARVIS\
 ```
 
 `usr` の場所は環境変数 `JARVIS_DATA_DIR` でも上書きできます。
-（exe と同じ場所に書き込みできない場合は `%APPDATA%\com.monster2408.jarvis` に自動フォールバック）
+（exe と同じ場所に書き込みできない場合は `%APPDATA%\com.hashimotok0808.jarvis` に自動フォールバック）
 
 アプリのエラーや警告は `usr\logs\jarvis.log` に記録されます。
 `usr` に書き込めない環境では `%LOCALAPPDATA%\JARVIS\logs\jarvis.log`
@@ -197,9 +197,9 @@ v0.2.0より前のアプリはリポジトリ内フォルダを確認しない�
 最初のv0.2.0への更新だけはインストーラを手動で実行してください。
 
 1. `latest.json` の `version` を新バージョンにし、`installer` にインストーラのファイル名を書く
-2. 同じフォルダにインストーラ（例: `JARVIS_0.4.1_x64-setup.exe`）を置く
+2. 同じフォルダにインストーラ（例: `JARVIS_0.4.3_x64-setup.exe`）を置く
 3. アプリ再起動（または設定 → アップデート → 再確認）
-4. ヘッダーに「更新 v0.4.1」が出る → 設定 → 「インストーラを起動」
+4. ヘッダーに「更新 v0.4.3」が出る → 設定 → 「インストーラを起動」
 
 インストーラ起動時にアプリは自動終了し、更新後は `usr` のデータを引き継いで再起動できます。
 更新後は初回起動時に前回と現在のバージョンを通知します。
@@ -260,6 +260,16 @@ v0.2.0より前のアプリはリポジトリ内フォルダを確認しない�
 | P3.5 | 指定フォルダへのインストール・`usr` データ領域・ローカル更新通知 | 完了 |
 | P4 | 添付・長期記憶 | 完了（v0.3.0） |
 | P5 | ツール実行 | 完了（v0.3.0） |
+
+### v0.4.3 で追加した機能
+
+- **状態インジケーター**: トレイとタスクバーのアイコン色で状態を表示
+  - 緑=待機 / 青=聞き取り中 / 黄=思考中 / 水色=発話中（トレイのツールチップも連動）
+- **OpenCode Go**: 常駐 `opencode web`（OpenAI互換）をプロバイダとして追加
+  - ベースURL・APIキー（`oc_sk_...`）・通常/重量級モデルを設定可能
+  - 接続テスト、自動振り分け（コーディング/分析は重量級モデル）、フォールバック対応
+- **設定UI**: 左目次＋メインの2ペイン構成。ダイアログを画面いっぱいに拡大
+  - プロバイダの追加/削除、現在のHUD位置の記憶
 
 ### v0.3.0 で追加した機能
 

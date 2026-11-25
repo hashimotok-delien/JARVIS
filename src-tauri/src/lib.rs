@@ -7,6 +7,7 @@ mod providers;
 mod secrets;
 mod speech;
 mod state;
+mod status;
 mod tools;
 
 use std::path::{Path, PathBuf};
@@ -343,6 +344,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::set_gemini_key,
+            commands::settings::set_opencode_key,
             commands::settings::test_providers,
             commands::voice::transcribe,
             commands::voice::transcribe_wake_sample,
@@ -389,6 +391,12 @@ pub fn run() {
             apply_window_icons(app);
             setup_tray(app)?;
             register_shortcuts(handle);
+
+            let initial_state = app
+                .try_state::<AppState>()
+                .and_then(|state| state.voice.lock().ok().map(|voice| voice.state.clone()))
+                .unwrap_or_else(|| "idle".to_string());
+            status::apply(handle, &initial_state);
 
             let settings = commands::read_settings_from(handle);
             commands::app::apply_hud_options(handle, &settings);

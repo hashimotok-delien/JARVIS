@@ -25,6 +25,15 @@ export async function publishVoiceTranscript(
   }
 }
 
+export async function publishVoiceSpectrum(values: number[]): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await emit(VOICE_SPECTRUM, { values });
+  } catch (error) {
+    void logError("publish_voice_spectrum", error);
+  }
+}
+
 export const CHAT_DELTA = "chat://delta";
 export const CHAT_DONE = "chat://done";
 export const CHAT_ERROR = "chat://error";
@@ -33,6 +42,7 @@ export const CHAT_TITLE = "chat://title";
 export const VOICE_STATE = "voice://state";
 export const VOICE_TOGGLE = "voice://toggle";
 export const VOICE_TRANSCRIPT = "voice://transcript";
+export const VOICE_SPECTRUM = "voice://spectrum";
 export const SETTINGS_CHANGED = "settings://changed";
 export const TOOL_APPROVAL = "tool://approval";
 export const TOOL_STATUS = "tool://status";

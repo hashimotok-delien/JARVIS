@@ -113,6 +113,63 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// Whether the window still carries the topmost bit.
+///
+/// A HUD pushed to the back (hands-free idle) stays visible, so a plain
+/// visibility check would make the toggle hide it instead of bringing it
+/// forward again.
+#[cfg(windows)]
+fn hud_is_topmost(hud: &tauri::WebviewWindow) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, WS_EX_TOPMOST,
+    };
+
+    let Ok(hwnd) = hud.hwnd() else {
+        return true;
+    };
+    let style = unsafe { GetWindowLongPtrW(hwnd.0, GWL_EXSTYLE) };
+    (style as u32 & WS_EX_TOPMOST) != 0
+}
+
+#[cfg(not(windows))]
+fn hud_is_topmost(_hud: &tauri::WebviewWindow) -> bool {
+    true
+}
+
+/// Force the window above other windows at the Win32 level as well, so a HUD
+/// that was dropped to the bottom is reliably raised even if Tauri's cached
+/// always-on-top flag is out of sync.
+#[cfg(windows)]
+fn raise_hud_window(hud: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
+
+    let hwnd = hud
+        .hwnd()
+        .map_err(|error| format!("HUDのウィンドウハンドルを取得できません: {error}"))?;
+    let result = unsafe {
+        SetWindowPos(
+            hwnd.0,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+        )
+    };
+    if result == 0 {
+        return Err("HUDを前面に移動できません".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn raise_hud_window(_hud: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 pub fn toggle_hud_window(app: &AppHandle) -> bool {
     let Some(hud) = app.get_webview_window("hud") else {
         return false;
@@ -126,6 +183,21 @@ pub fn toggle_hud_window(app: &AppHandle) -> bool {
         }
     };
 
+    if visible && !hud_is_topmost(&hud) {
+        // It was sent to the back while idle: raising it is what the user
+        // means by "show the HUD".
+        if let Err(error) = hud.set_always_on_top(true) {
+            crate::log_message("ERROR", "window", &format!("raise HUD: {error}"));
+        }
+        if let Err(error) = raise_hud_window(&hud) {
+            crate::log_message("ERROR", "window", &format!("raise HUD: {error}"));
+        }
+        if let Err(error) = hud.set_focus() {
+            crate::log_message("ERROR", "window", &format!("focus HUD: {error}"));
+        }
+        return true;
+    }
+
     if visible {
         if let Err(error) = hud.hide() {
             crate::log_message("ERROR", "window", &format!("hide HUD: {error}"));
@@ -136,6 +208,18 @@ pub fn toggle_hud_window(app: &AppHandle) -> bool {
         if let Err(error) = hud.show() {
             crate::log_message("ERROR", "window", &format!("show HUD: {error}"));
             return false;
+        }
+        if let Err(error) = hud.unminimize() {
+            crate::log_message("ERROR", "window", &format!("unminimize HUD: {error}"));
+        }
+        // A previous idle transition may have dropped the always-on-top flag,
+        // leaving the HUD rendered behind the main window. Re-raise it here so
+        // an explicit toggle always brings it to the front.
+        if let Err(error) = hud.set_always_on_top(true) {
+            crate::log_message("ERROR", "window", &format!("raise HUD: {error}"));
+        }
+        if let Err(error) = raise_hud_window(&hud) {
+            crate::log_message("ERROR", "window", &format!("raise HUD: {error}"));
         }
         if let Err(error) = hud.set_focus() {
             crate::log_message("ERROR", "window", &format!("focus HUD: {error}"));
@@ -203,6 +287,62 @@ pub fn toggle_mute_impl(app: &AppHandle) -> Result<bool, String> {
     Ok(settings.tts.enabled)
 }
 
+/// Keep the HUD on a real monitor. A saved position can fall into the gap
+/// between displays (or a monitor that was unplugged), which makes the window
+/// invisible even though it is "shown". When that happens, fall back to the
+/// primary monitor's top-left corner.
+fn clamp_hud_position(
+    hud: &tauri::WebviewWindow,
+    desired: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+) -> LogicalPosition<f64> {
+    let Ok(monitors) = hud.available_monitors() else {
+        return desired;
+    };
+    if monitors.is_empty() {
+        return desired;
+    }
+
+    let scale = hud.scale_factor().unwrap_or(1.0);
+    let left = desired.x * scale;
+    let top = desired.y * scale;
+    let right = left + size.width * scale;
+    let bottom = top + size.height * scale;
+    let margin = 48.0 * scale;
+
+    let visible = monitors.iter().any(|monitor| {
+        let position = monitor.position();
+        let monitor_size = monitor.size();
+        let monitor_right = position.x as f64 + monitor_size.width as f64;
+        let monitor_bottom = position.y as f64 + monitor_size.height as f64;
+        let overlap_x =
+            right.min(monitor_right) - left.max(position.x as f64);
+        let overlap_y =
+            bottom.min(monitor_bottom) - top.max(position.y as f64);
+        overlap_x >= margin && overlap_y >= margin
+    });
+    if visible {
+        return desired;
+    }
+
+    let monitor = hud
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| monitors.first().cloned());
+    match monitor {
+        Some(monitor) => {
+            let monitor_scale = monitor.scale_factor();
+            let position = monitor.position();
+            LogicalPosition::new(
+                position.x as f64 / monitor_scale + 50.0,
+                position.y as f64 / monitor_scale + 50.0,
+            )
+        }
+        None => desired,
+    }
+}
+
 pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
     if let Some(hud) = app.get_webview_window("hud") {
         if let Err(error) = hud.set_ignore_cursor_events(settings.hud.click_through) {
@@ -212,16 +352,18 @@ pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
                 &format!("apply HUD click-through: {error}"),
             );
         }
-        if let Err(error) = hud.set_size(LogicalSize::new(
+        let size = LogicalSize::new(
             settings.hud.width as f64,
             settings.hud.height as f64,
-        )) {
+        );
+        if let Err(error) = hud.set_size(size) {
             crate::log_message("ERROR", "window", &format!("resize HUD: {error}"));
         }
-        if let Err(error) = hud.set_position(LogicalPosition::new(
+        let desired = LogicalPosition::new(
             settings.hud.position_x as f64,
             settings.hud.position_y as f64,
-        )) {
+        );
+        if let Err(error) = hud.set_position(clamp_hud_position(&hud, desired, size)) {
             crate::log_message("ERROR", "window", &format!("position HUD: {error}"));
         }
         // Pinning keeps the HUD at the saved position and on top of
@@ -243,9 +385,6 @@ pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
 #[tauri::command]
 pub fn set_hud_priority(app: AppHandle, foreground: bool) -> Result<(), String> {
     let settings = crate::commands::read_settings_from(&app);
-    if !settings.hud.pinned {
-        return Ok(());
-    }
 
     let hud = app
         .get_webview_window("hud")
@@ -281,7 +420,13 @@ pub fn toggle_hud(app: AppHandle) -> bool {
 #[tauri::command]
 pub fn set_hud_visible(app: AppHandle, visible: bool) {
     if let Some(hud) = app.get_webview_window("hud") {
-        let result = if visible { hud.show() } else { hud.hide() };
+        let result = if visible {
+            hud.set_always_on_top(true)
+                .and_then(|_| hud.show())
+                .and_then(|_| hud.unminimize())
+        } else {
+            hud.hide()
+        };
         if let Err(error) = result {
             crate::log_message("ERROR", "window", &format!("set HUD visibility: {error}"));
         }
@@ -314,6 +459,7 @@ pub fn report_voice_state(
             );
         }
     }
+    crate::status::apply(&app, &state_name);
     events::emit(
         &app,
         events::VOICE_STATE,

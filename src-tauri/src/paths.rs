@@ -45,7 +45,7 @@ pub fn resolve_data_dir_headless() -> PathBuf {
     let fallback = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("com.monster2408.jarvis");
+        .join("com.hashimotok0808.jarvis");
     let _ = std::fs::create_dir_all(&fallback);
     fallback
 }

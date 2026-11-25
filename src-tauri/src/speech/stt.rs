@@ -3,6 +3,7 @@
 //! speech.cpp keeps its recognizer loaded in a worker process, so an utterance
 //! costs tens of milliseconds instead of a model load per request.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager};
@@ -169,7 +170,13 @@ fn wake_prompt(settings: &Settings) -> String {
         "じゃあびす".to_string(),
     ];
     phrases.extend(settings.stt.wake_samples.iter().cloned());
-    phrases.join(", ")
+    let mut unique: Vec<String> = Vec::new();
+    for phrase in phrases {
+        if !unique.iter().any(|existing| existing == &phrase) {
+            unique.push(phrase);
+        }
+    }
+    unique.join(", ")
 }
 
 fn whisper_ready(app: &AppHandle, settings: &Settings) -> bool {
@@ -297,8 +304,25 @@ pub fn availability(app: &AppHandle, settings: &Settings) -> (bool, String) {
     }
 }
 
+/// Whisper (especially the small model) and noisy recordings can produce a
+/// single syllable repeated over and over, e.g. "ババババババ". Treat that as a
+/// failed recognition instead of showing nonsense to the user.
+fn is_degenerate_transcript(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    if chars.len() < 8 {
+        return false;
+    }
+    let mut counts: HashMap<char, usize> = HashMap::new();
+    for character in &chars {
+        *counts.entry(*character).or_default() += 1;
+    }
+    let most = counts.values().copied().max().unwrap_or(0);
+    most * 100 / chars.len() >= 60
+}
+
 pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {
-    match active_engine(app, settings) {
+    let engine = active_engine(app, settings);
+    let result = match engine {
         "speech" => match transcribe_speech(app, settings, wav) {
             Ok(text) => Ok(text),
             Err(error) => {
@@ -315,7 +339,43 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
             "音声認識エンジンがありません。設定で speech.exe か whisper-cli.exe を指定してください。"
                 .to_string(),
         ),
+    };
+
+    // Recording-quality diagnostics: a very low peak means the wrong input
+    // device (or a muted mic) was captured, which the model turns into
+    // meaningless filler.
+    if let Ok(text) = &result {
+        let peak = wav_pcm(wav)
+            .map(|(pcm, _)| {
+                pcm.chunks_exact(2)
+                    .map(|frame| i16::from_le_bytes([frame[0], frame[1]]).unsigned_abs())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        let preview: String = text.chars().take(80).collect();
+        crate::log_message(
+            "DEBUG",
+            "stt",
+            &format!(
+                "engine={engine} wav_bytes={} peak={peak} text={preview}",
+                wav.len()
+            ),
+        );
+        if is_degenerate_transcript(text) {
+            crate::log_message(
+                "WARN",
+                "stt",
+                &format!("degenerate transcript rejected (engine={engine})"),
+            );
+            return Err(
+                "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
+                    .to_string(),
+            );
+        }
     }
+
+    result
 }
 
 fn transcribe_speech(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {
@@ -579,6 +639,15 @@ mod tests {
     #[test]
     fn non_wav_input_is_rejected() {
         assert!(wav_pcm(b"not a wav file").is_err());
+    }
+
+    #[test]
+    fn repeated_syllable_is_treated_as_garbage() {
+        assert!(is_degenerate_transcript(
+            "ババババババババババババババババイト"
+        ));
+        assert!(!is_degenerate_transcript("こんにちは、ジャービスです"));
+        assert!(!is_degenerate_transcript("はい"));
     }
 
     #[test]

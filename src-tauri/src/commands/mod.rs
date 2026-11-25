@@ -34,18 +34,19 @@ pub fn settings_payload(app: &AppHandle) -> crate::models::SettingsPayload {
     let state = app.state::<AppState>();
     let settings = read_settings(&state);
 
-    let (has_key, previous_version) = {
+    let (has_key, has_opencode_key, previous_version) = {
         let conn = state
             .db
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let has_key = db::get_secret(&conn, "gemini_api_key").is_some();
+        let has_opencode_key = db::get_secret(&conn, "opencode_api_key").is_some();
         let previous_version = state
             .previous_version
             .lock()
             .ok()
             .and_then(|value| value.clone());
-        (has_key, previous_version)
+        (has_key, has_opencode_key, previous_version)
     };
 
     let (stt_available, stt_detail) = crate::speech::stt::availability(app, &settings);
@@ -53,6 +54,7 @@ pub fn settings_payload(app: &AppHandle) -> crate::models::SettingsPayload {
     crate::models::SettingsPayload {
         settings,
         has_gemini_key: has_key,
+        has_opencode_key,
         stt_available,
         stt_detail,
         db_path: state

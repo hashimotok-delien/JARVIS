@@ -16,10 +16,14 @@ use crate::state::AppState;
 
 pub use openai_compat::{ChatTurn, ProviderConfig, StreamFailure};
 
-pub fn gemini_key(app: &AppHandle) -> Option<String> {
+pub fn secret_key(app: &AppHandle, key: &str) -> Option<String> {
     let state = app.state::<AppState>();
     let conn = state.db.lock().ok()?;
-    db::get_secret(&conn, "gemini_api_key")
+    db::get_secret(&conn, key)
+}
+
+pub fn gemini_key(app: &AppHandle) -> Option<String> {
+    secret_key(app, "gemini_api_key")
 }
 
 /// Heuristic: short, conversational prompts can run locally; long or
@@ -44,18 +48,36 @@ pub fn resolve_providers(
     force_local: bool,
 ) -> Vec<ProviderConfig> {
     let key = gemini_key(app);
+    let opencode_key = secret_key(app, "opencode_api_key");
+    let heavy = probe.map(|text| !prefer_local(text)).unwrap_or(false);
 
     let mut order = settings.providers.order.clone();
     if settings.providers.auto_route || force_local {
-        if let Some(text) = probe {
-            // Voice turns always prefer the local model when available.
-            let local_first = force_local || prefer_local(text);
+        if probe.is_some() {
+            // 0 = best. Voice turns always prefer the local model.
             order.sort_by_key(|id| {
-                let local = id == "ollama";
-                if local_first {
-                    !local as u8
+                let id = id.as_str();
+                if force_local {
+                    match id {
+                        "ollama" => 0u8,
+                        "opencode" => 1,
+                        "gemini" => 2,
+                        _ => 3,
+                    }
+                } else if heavy {
+                    match id {
+                        "opencode" => 0u8,
+                        "gemini" => 1,
+                        "ollama" => 2,
+                        _ => 3,
+                    }
                 } else {
-                    local as u8
+                    match id {
+                        "ollama" => 0u8,
+                        "opencode" => 1,
+                        "gemini" => 2,
+                        _ => 3,
+                    }
                 }
             });
         }
@@ -78,6 +100,18 @@ pub fn resolve_providers(
                 base_url: format!("{}/v1", settings.providers.ollama_base_url),
                 api_key: None,
                 model: settings.providers.ollama_model.clone(),
+                temperature: settings.temperature,
+            }),
+            "opencode" => Some(ProviderConfig {
+                id: "opencode",
+                label: "OpenCode",
+                base_url: settings.providers.opencode_base_url.clone(),
+                api_key: opencode_key.clone(),
+                model: if heavy {
+                    settings.providers.opencode_heavy_model.clone()
+                } else {
+                    settings.providers.opencode_model.clone()
+                },
                 temperature: settings.temperature,
             }),
             _ => None,
@@ -185,16 +219,20 @@ pub async fn run(app: AppHandle, ctx: StreamContext, settings: Settings, cancel:
     let mut candidates: Vec<ProviderConfig> = Vec::new();
     let mut skipped: Option<String> = None;
     for provider in providers {
-        if provider.id == "gemini" && provider.api_key.is_none() {
-            skipped = Some("Gemini の API キーが未設定のためスキップ".into());
+        if (provider.id == "gemini" || provider.id == "opencode")
+            && provider.api_key.is_none()
+        {
+            skipped = Some(format!(
+                "{} の API キーが未設定のためスキップ",
+                provider.label
+            ));
             continue;
         }
         candidates.push(provider);
     }
 
-
     if candidates.is_empty() {
-        let error = "Gemini の API キーが未設定で、他に利用できるプロバイダがありません。";
+        let error = "利用可能なプロバイダがありません。設定で API キーを確認してください。";
         persist_assistant(&app, &ctx, "", "none", "none", Some(error.into()));
         events::emit(
             &app,

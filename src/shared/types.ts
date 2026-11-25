@@ -86,7 +86,7 @@ export interface AppInfo {
   version: string;
 }
 
-export type ProviderId = "gemini" | "ollama";
+export type ProviderId = "gemini" | "ollama" | "opencode";
 
 export interface ProviderSettings {
   order: ProviderId[];
@@ -94,6 +94,9 @@ export interface ProviderSettings {
   geminiBaseUrl: string;
   ollamaModel: string;
   ollamaBaseUrl: string;
+  opencodeBaseUrl: string;
+  opencodeModel: string;
+  opencodeHeavyModel: string;
   autoRoute: boolean;
 }
 
@@ -115,6 +118,7 @@ export interface SttSettings {
   speechPath: string;
   speechModel: string;
   speechDevice: "auto" | "gpu" | "cpu";
+  inputDeviceId: string;
   speechKeywords: boolean;
   whisperPath: string;
   modelPath: string;
@@ -207,6 +211,7 @@ export interface Settings {
 
 export interface SettingsPayload extends Settings {
   hasGeminiKey: boolean;
+  hasOpencodeKey: boolean;
   sttAvailable: boolean;
   sttDetail: string;
   dbPath: string;
@@ -297,6 +302,10 @@ export interface VoiceStateEvent {
 export interface VoiceTranscriptEvent {
   text: string;
   isFinal: boolean;
+}
+
+export interface VoiceSpectrumEvent {
+  values: number[];
 }
 
 export interface ToolApprovalEvent {

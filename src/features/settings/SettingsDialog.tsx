@@ -42,7 +42,10 @@ import type {
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   gemini: "Gemini（クラウド・無料枠）",
   ollama: "Ollama（ローカル）",
+  opencode: "OpenCode Go（サーバー）",
 };
+
+const ALL_PROVIDERS: ProviderId[] = ["opencode", "gemini", "ollama"];
 
 const INPUT_CLASS =
   "w-[220px] rounded-md border border-[var(--border-subtle)] " +
@@ -58,6 +61,9 @@ function toDraft(source: Settings): Settings {
       geminiBaseUrl: source.providers.geminiBaseUrl,
       ollamaModel: source.providers.ollamaModel,
       ollamaBaseUrl: source.providers.ollamaBaseUrl,
+      opencodeBaseUrl: source.providers.opencodeBaseUrl,
+      opencodeModel: source.providers.opencodeModel,
+      opencodeHeavyModel: source.providers.opencodeHeavyModel,
       autoRoute: source.providers.autoRoute,
     },
     systemPrompt: source.systemPrompt,
@@ -143,15 +149,33 @@ function Switch({
   );
 }
 
+const SETTINGS_SECTIONS = [
+  { id: "providers", label: "接続 / プロバイダ" },
+  { id: "conversation", label: "会話" },
+  { id: "tts", label: "音声出力" },
+  { id: "stt", label: "音声入力" },
+  { id: "tools", label: "ツール実行" },
+  { id: "memory", label: "長期記憶" },
+  { id: "display", label: "表示 / 通知" },
+  { id: "data", label: "データ" },
+  { id: "window", label: "ウィンドウ" },
+  { id: "update", label: "アップデート" },
+];
+
 function Section({
+  id,
   title,
   children,
 }: {
+  id?: string;
   title: string;
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
+    <section
+      id={id}
+      className="scroll-mt-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3"
+    >
       <h4 className="mb-1 text-[10px] tracking-[0.22em] text-[var(--text-muted)]">
         {title}
       </h4>
@@ -220,10 +244,10 @@ function PathRow({
   );
 }
 
-async function measureNoiseFloor(): Promise<number[]> {
+async function measureNoiseFloor(inputDeviceId?: string): Promise<number[]> {
   const recorder = new MicRecorder();
   try {
-    await recorder.start();
+    await recorder.start(inputDeviceId);
     const levels: number[] = [];
     await new Promise<void>((resolve) => {
       const startedAt = performance.now();
@@ -256,6 +280,15 @@ export default function SettingsDialog({
   const update = useUpdate();
   const [draft, setDraft] = useState<Settings | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [opencodeKey, setOpencodeKey] = useState("");
+  const [activeSection, setActiveSection] = useState("providers");
+
+  const jumpToSection = (id: string) => {
+    setActiveSection(id);
+    document
+      .getElementById(`settings-${id}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const [checks, setChecks] = useState<ProviderCheck[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -263,7 +296,27 @@ export default function SettingsDialog({
   const [calibratingThreshold, setCalibratingThreshold] = useState(false);
   const [modelStatus, setModelStatus] = useState<SpeechModelStatus | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
   const draftRef = useRef<Settings | null>(null);
+
+  const loadInputDevices = async (requestPermission = false) => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      let devices = await navigator.mediaDevices.enumerateDevices();
+      let inputs = devices.filter((device) => device.kind === "audioinput");
+      if (requestPermission && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+        stream.getTracks().forEach((track) => track.stop());
+        devices = await navigator.mediaDevices.enumerateDevices();
+        inputs = devices.filter((device) => device.kind === "audioinput");
+      }
+      setInputDevices(inputs);
+    } catch (error) {
+      void logError("enumerate_input_devices", error);
+    }
+  };
 
   useEffect(() => {
     draftRef.current = draft;
@@ -272,6 +325,7 @@ export default function SettingsDialog({
   useEffect(() => {
     if (!open) return;
     void speechModelStatus().then(setModelStatus);
+    void loadInputDevices();
     let unlisten: (() => void) | undefined;
     void onEvent<SpeechModelProgressEvent>(SPEECH_MODEL_PROGRESS, (value) => {
       setDownloadProgress(value.total > 0 ? value.received / value.total : 0);
@@ -287,6 +341,7 @@ export default function SettingsDialog({
     if (current) {
       setDraft(toDraft(current));
       setApiKey("");
+      setOpencodeKey("");
       setChecks(null);
       setMessage(null);
     }
@@ -327,6 +382,26 @@ export default function SettingsDialog({
       );
     } catch (error) {
       void logError("save_gemini_key", error);
+      setMessage(`API キーの保存に失敗: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveOpencodeKey = async () => {
+    setBusy(true);
+    try {
+      await settingsStore.updateOpencodeKey(
+        opencodeKey.trim() ? opencodeKey : null,
+      );
+      setOpencodeKey("");
+      setMessage(
+        opencodeKey.trim()
+          ? "OpenCode API キーを保存しました"
+          : "OpenCode API キーを削除しました",
+      );
+    } catch (error) {
+      void logError("save_opencode_key", error);
       setMessage(`API キーの保存に失敗: ${String(error)}`);
     } finally {
       setBusy(false);
@@ -410,7 +485,7 @@ export default function SettingsDialog({
     setBusy(true);
     setCalibratingThreshold(true);
     try {
-      const levels = await measureNoiseFloor();
+      const levels = await measureNoiseFloor(draft.stt.inputDeviceId);
       if (levels.length < 20) {
         throw new Error("周囲の音を十分に測定できませんでした");
       }
@@ -509,7 +584,7 @@ export default function SettingsDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div className="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--bg-base)] shadow-2xl">
+      <div className="flex h-[90vh] max-h-[92vh] w-full max-w-[min(1400px,94vw)] flex-col overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--bg-base)] shadow-2xl">
         <header className="flex shrink-0 items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
             <h3 className="text-sm font-medium text-[var(--text-primary)]">
@@ -529,8 +604,29 @@ export default function SettingsDialog({
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-          <Section title="プロバイダ / フォールバック順">
+        <div className="flex min-h-0 flex-1">
+          <nav className="w-48 shrink-0 space-y-1 overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] p-2">
+            {SETTINGS_SECTIONS.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => jumpToSection(section.id)}
+                className={`block w-full rounded-md px-2.5 py-1.5 text-left text-[11px] transition ${
+                  activeSection === section.id
+                    ? "bg-[var(--bg-hover)] text-[var(--accent)]"
+                    : "text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                {section.label}
+              </button>
+            ))}
+            <p className="px-2 pt-2 text-[9px] leading-relaxed text-[var(--text-muted)]">
+              「保存」で反映されます。HUD固定時は現在の位置を記憶します。
+            </p>
+          </nav>
+
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          <Section id="settings-providers" title="プロバイダ / フォールバック順">
             {draft.providers.order.map((id, index) => (
               <div
                 key={id}
@@ -554,8 +650,45 @@ export default function SettingsDialog({
                   >
                     <ArrowDown size={11} />
                   </button>
+                  <button
+                    type="button"
+                    disabled={draft.providers.order.length <= 1}
+                    onClick={() =>
+                      patch({
+                        providers: {
+                          ...draft.providers,
+                          order: draft.providers.order.filter(
+                            (item) => item !== id,
+                          ),
+                        },
+                      })
+                    }
+                    className="rounded border border-[var(--border-subtle)] p-1 text-[var(--text-muted)] transition hover:text-[var(--error)] disabled:opacity-30"
+                  >
+                    <X size={11} />
+                  </button>
                 </span>
               </div>
+            ))}
+
+            {ALL_PROVIDERS.filter(
+              (id) => !draft.providers.order.includes(id),
+            ).map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() =>
+                  patch({
+                    providers: {
+                      ...draft.providers,
+                      order: [...draft.providers.order, id],
+                    },
+                  })
+                }
+                className="flex w-full items-center gap-1 rounded-md border border-dashed border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent-dim)] hover:text-[var(--accent)]"
+              >
+                <Plus size={10} /> {PROVIDER_LABELS[id]} を追加
+              </button>
             ))}
 
             <Row label="Gemini モデル">
@@ -612,6 +745,81 @@ export default function SettingsDialog({
               />
             </Row>
 
+            <div className="mt-2 space-y-1 border-t border-[var(--border-subtle)] pt-2">
+              <p className="text-[10px] font-medium text-[var(--text-secondary)]">
+                OpenCode Go（`opencode web` サーバー）
+              </p>
+              <Row label="Base URL" hint="/v1 まで含める">
+                <input
+                  value={draft.providers.opencodeBaseUrl}
+                  onChange={(event) =>
+                    patch({
+                      providers: {
+                        ...draft.providers,
+                        opencodeBaseUrl: event.target.value,
+                      },
+                    })
+                  }
+                  placeholder="http://192.168.0.10:3000/v1"
+                  className={INPUT_CLASS}
+                />
+              </Row>
+              <Row label="モデル（通常）">
+                <input
+                  value={draft.providers.opencodeModel}
+                  onChange={(event) =>
+                    patch({
+                      providers: {
+                        ...draft.providers,
+                        opencodeModel: event.target.value,
+                      },
+                    })
+                  }
+                  placeholder="deepseek-v4.1-flash"
+                  className={INPUT_CLASS}
+                />
+              </Row>
+              <Row label="モデル（重量級）" hint="自動振り分け用">
+                <input
+                  value={draft.providers.opencodeHeavyModel}
+                  onChange={(event) =>
+                    patch({
+                      providers: {
+                        ...draft.providers,
+                        opencodeHeavyModel: event.target.value,
+                      },
+                    })
+                  }
+                  placeholder="deepseek-v4.1-pro"
+                  className={INPUT_CLASS}
+                />
+              </Row>
+              <Row
+                label="OpenCode API キー"
+                hint={settings?.hasOpencodeKey ? "保存済み（DPAPI）" : "未設定"}
+              >
+                <input
+                  type="password"
+                  value={opencodeKey}
+                  onChange={(event) => setOpencodeKey(event.target.value)}
+                  placeholder={
+                    settings?.hasOpencodeKey ? "••••••••" : "oc_sk_..."
+                  }
+                  className={INPUT_CLASS}
+                />
+              </Row>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void saveOpencodeKey()}
+                  disabled={busy}
+                  className="rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-50"
+                >
+                  キーを保存
+                </button>
+              </div>
+            </div>
+
             <div className="mt-2 border-t border-[var(--border-subtle)] pt-2">
               <Row
                 label="Gemini API キー"
@@ -659,7 +867,7 @@ export default function SettingsDialog({
             </div>
           </Section>
 
-          <Section title="会話">
+          <Section id="settings-conversation" title="会話">
             <Row
               label="呼び名"
               hint="起動時は「〇〇様」と挨拶（様は入力不要）"
@@ -714,7 +922,7 @@ export default function SettingsDialog({
             </Row>
           </Section>
 
-          <Section title="音声出力（TTS）">
+          <Section id="settings-tts" title="音声出力（TTS）">
             <Row label="読み上げ">
               <Switch
                 checked={draft.tts.enabled}
@@ -838,7 +1046,7 @@ export default function SettingsDialog({
             </Row>
           </Section>
 
-          <Section title="音声入力（STT）">
+          <Section id="settings-stt" title="音声入力（STT）">
             <Row label="音声入力">
               <Switch
                 checked={draft.stt.enabled}
@@ -859,6 +1067,40 @@ export default function SettingsDialog({
                 <option value="speech">speech.cpp（Haas-ja・高速）</option>
                 <option value="whisper">whisper.cpp</option>
               </select>
+            </Row>
+            <Row label="マイク入力" hint="文字起こしに使う入力デバイス">
+              <span className="flex items-center gap-1">
+                <select
+                  value={draft.stt.inputDeviceId}
+                  onChange={(event) =>
+                    patch({
+                      stt: {
+                        ...draft.stt,
+                        inputDeviceId: event.target.value,
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[190px]`}
+                >
+                  <option value="">システム既定</option>
+                  {inputDevices.map((device, index) => (
+                    <option
+                      key={device.deviceId || `input-${index}`}
+                      value={device.deviceId}
+                    >
+                      {device.label || `マイク ${index + 1}`}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void loadInputDevices(true)}
+                  title="マイク一覧を更新（初回は許可が必要）"
+                  className="shrink-0 rounded-md border border-[var(--border-strong)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+                >
+                  更新
+                </button>
+              </span>
             </Row>
             {draft.stt.engine === "speech" ? (
               <>
@@ -1144,7 +1386,7 @@ export default function SettingsDialog({
             </div>
           </Section>
 
-          <Section title="ツール実行（Function Calling）">
+          <Section id="settings-tools" title="ツール実行（Function Calling）">
             <Row
               label="ツール実行を有効化"
               hint="モデルが必要に応じて検索・ファイル操作などを呼びます"
@@ -1318,7 +1560,7 @@ export default function SettingsDialog({
             </div>
           </Section>
 
-          <Section title="長期記憶">
+          <Section id="settings-memory" title="長期記憶">
             <Row label="長期記憶を有効化">
               <Switch
                 checked={draft.memory.enabled}
@@ -1376,7 +1618,7 @@ export default function SettingsDialog({
             </p>
           </Section>
 
-          <Section title="表示 / クリップボード">
+          <Section id="settings-display" title="表示 / クリップボード">
             <Row label="テーマ">
               <select
                 value={draft.ui.theme}
@@ -1435,7 +1677,7 @@ export default function SettingsDialog({
             </Row>
           </Section>
 
-          <Section title="データ">
+          <Section id="settings-data" title="データ">
             <div className="flex flex-wrap gap-2 pt-1">
               <button
                 type="button"
@@ -1476,7 +1718,7 @@ export default function SettingsDialog({
             </p>
           </Section>
 
-          <Section title="ウィンドウ">
+          <Section id="settings-window" title="ウィンドウ">
             <Row
               label="HUDを固定"
               hint="この位置で固定します"
@@ -1626,7 +1868,7 @@ export default function SettingsDialog({
             </Row>
           </Section>
 
-          <Section title="アップデート">
+          <Section id="settings-update" title="アップデート">
             <Row label="現在のバージョン">
               <span className="text-[11px] text-[var(--text-secondary)]">
                 v{update?.currentVersion ?? "—"}
@@ -1745,6 +1987,7 @@ export default function SettingsDialog({
               <Check size={11} /> {message}
             </p>
           )}
+          </div>
         </div>
 
         <footer className="flex shrink-0 justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
@@ -1769,6 +2012,7 @@ export default function SettingsDialog({
       {enrolling && (
         <WakeEnrollDialog
           threshold={draft.stt.threshold}
+          inputDeviceId={draft.stt.inputDeviceId}
           onComplete={(samples) => void finishWakeEnrollment(samples)}
           onCancel={cancelWakeEnrollment}
         />

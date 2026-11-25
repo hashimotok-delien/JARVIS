@@ -5,11 +5,29 @@ import { HUD_STATE_META } from "./states";
 interface HudRingProps {
   state: HudState;
   size?: number;
+  /** Normalized frequency levels emitted while the assistant speaks. */
+  spectrum?: number[];
 }
 
-export default function HudRing({ state, size = 112 }: HudRingProps) {
+const BAR_COUNT = 32;
+const BAR_INNER = 45;
+const BAR_MAX = 15;
+
+export default function HudRing({
+  state,
+  size = 112,
+  spectrum,
+}: HudRingProps) {
   const meta = HUD_STATE_META[state];
   const isBusy = state === "thinking";
+  const active = state === "speaking" || state === "listening";
+  const levels =
+    spectrum && spectrum.length > 0
+      ? spectrum
+      : new Array<number>(BAR_COUNT).fill(0);
+  const level = active
+    ? levels.reduce((sum, value) => sum + value, 0) / levels.length
+    : 0;
 
   return (
     <div
@@ -77,6 +95,43 @@ export default function HudRing({ state, size = 112 }: HudRingProps) {
           strokeLinecap="round"
         />
       </motion.svg>
+
+      <svg
+        viewBox="0 0 120 120"
+        className="absolute inset-0"
+        aria-hidden="true"
+      >
+        {levels.map((value, index) => {
+          const angle = (index / levels.length) * Math.PI * 2 - Math.PI / 2;
+          const amount = active ? Math.min(1, value) : 0;
+          const inner = BAR_INNER;
+          const outer = inner + 2 + amount * BAR_MAX;
+          return (
+            <line
+              key={index}
+              x1={60 + Math.cos(angle) * inner}
+              y1={60 + Math.sin(angle) * inner}
+              x2={60 + Math.cos(angle) * outer}
+              y2={60 + Math.sin(angle) * outer}
+              stroke="currentColor"
+              strokeWidth={2.4}
+              strokeLinecap="round"
+              opacity={active ? 0.35 + amount * 0.65 : 0.12}
+            />
+          );
+        })}
+      </svg>
+
+      <div
+        className="absolute inset-[30%] rounded-full"
+        style={{
+          background: "currentColor",
+          filter: "blur(5px)",
+          opacity: active ? 0.2 + level * 0.55 : 0,
+          transform: `scale(${1 + level * 0.7})`,
+          transition: "transform 80ms linear, opacity 80ms linear",
+        }}
+      />
 
       <motion.div
         className="absolute inset-[34%] rounded-full"

@@ -14,6 +14,7 @@ import {
   CHAT_ERROR,
   CHAT_PROVIDER,
   CHAT_TITLE,
+  VOICE_SPECTRUM,
   VOICE_STATE,
   VOICE_TRANSCRIPT,
   onEvent,
@@ -27,6 +28,7 @@ import type {
   ChatProviderEvent,
   ChatTitleEvent,
   HudState,
+  VoiceSpectrumEvent,
   VoiceStateEvent,
   VoiceTranscriptEvent,
 } from "../../shared/types";
@@ -67,6 +69,7 @@ export default function HudOverlay() {
   const [userInput, setUserInput] = useState("");
   const [providerModel, setProviderModel] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [spectrum, setSpectrum] = useState<number[]>([]);
 
   useEffect(() => {
     void settingsStore.init();
@@ -130,6 +133,10 @@ export default function HudOverlay() {
       setUserInput(payload.text);
     }).then((unlisten) => unlisteners.push(unlisten));
 
+    void onEvent<VoiceSpectrumEvent>(VOICE_SPECTRUM, (payload) => {
+      setSpectrum(payload.values);
+    }).then((unlisten) => unlisteners.push(unlisten));
+
     return () => {
       unlisteners.forEach((unlisten) => unlisten());
     };
@@ -190,7 +197,11 @@ export default function HudOverlay() {
 
         <div className="flex min-h-0 flex-1 items-stretch gap-3 px-3 pb-2">
           <div className="flex shrink-0 items-center">
-            <HudRing state={state} size={expanded ? 132 : 88} />
+            <HudRing
+              state={state}
+              size={expanded ? 132 : 88}
+              spectrum={spectrum}
+            />
           </div>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">

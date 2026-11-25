@@ -29,6 +29,7 @@ type Phase = "speaking" | "listening" | "transcribing" | "done" | "error";
 
 interface WakeEnrollDialogProps {
   threshold: number;
+  inputDeviceId?: string;
   onComplete: (samples: string[]) => void;
   onCancel: () => void;
 }
@@ -39,6 +40,7 @@ function wait(ms: number): Promise<void> {
 
 export default function WakeEnrollDialog({
   threshold,
+  inputDeviceId,
   onComplete,
   onCancel,
 }: WakeEnrollDialogProps) {
@@ -90,7 +92,7 @@ export default function WakeEnrollDialog({
       heardSpeech: boolean;
     }> => {
       const recorder = new MicRecorder();
-      return recorder.start().then(
+      return recorder.start(inputDeviceId).then(
         () =>
           new Promise((resolve, reject) => {
             const startedAt = performance.now();

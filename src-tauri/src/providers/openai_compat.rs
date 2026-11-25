@@ -24,6 +24,10 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+    /// Provider-specific metadata that must be echoed back verbatim.
+    /// Gemini thinking models return `google.thought_signature` here and
+    /// reject follow-up requests that drop it.
+    pub extra_content: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -222,6 +226,17 @@ where
                     if let Some(args) = entry.pointer("/function/arguments").and_then(Value::as_str)
                     {
                         slot.arguments.push_str(args);
+                    }
+                    if let Some(extra) = entry.get("extra_content") {
+                        // Only keep a usable signature. Sending back an empty
+                        // `extra_content` makes Gemini reject the whole turn.
+                        let has_signature = extra
+                            .pointer("/google/thought_signature")
+                            .and_then(Value::as_str)
+                            .is_some_and(|signature| !signature.is_empty());
+                        if has_signature {
+                            slot.extra_content = Some(extra.clone());
+                        }
                     }
                 }
             }

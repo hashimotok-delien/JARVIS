@@ -52,6 +52,21 @@ pub fn set_gemini_key(
     Ok(payload)
 }
 
+#[tauri::command]
+pub fn set_opencode_key(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: Option<String>,
+) -> Result<SettingsPayload, String> {
+    {
+        let conn = crate::commands::lock_db(&state)?;
+        db::set_secret(&conn, "opencode_api_key", key.as_deref())?;
+    }
+    let payload = crate::commands::settings_payload(&app);
+    events::emit(&app, events::SETTINGS_CHANGED, payload.settings.clone());
+    Ok(payload)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCheck {
@@ -111,9 +126,12 @@ pub async fn test_providers(
     state: State<'_, AppState>,
 ) -> Result<Vec<ProviderCheck>, String> {
     let settings = crate::commands::read_settings(&state);
-    let key = {
+    let (key, opencode_key) = {
         let conn = crate::commands::lock_db(&state)?;
-        db::get_secret(&conn, "gemini_api_key")
+        (
+            db::get_secret(&conn, "gemini_api_key"),
+            db::get_secret(&conn, "opencode_api_key"),
+        )
     };
 
     let client = reqwest::Client::builder()
@@ -124,15 +142,25 @@ pub async fn test_providers(
 
     let gemini_url = format!("{}/chat/completions", settings.providers.gemini_base_url);
     let ollama_url = format!("{}/v1/chat/completions", settings.providers.ollama_base_url);
+    let opencode_url = format!(
+        "{}/chat/completions",
+        settings.providers.opencode_base_url
+    );
 
-    let (gemini, ollama) = tokio::join!(
+    let (gemini, ollama, opencode) = tokio::join!(
         probe(
             &client,
             &gemini_url,
             key.as_deref(),
             &settings.providers.gemini_model
         ),
-        probe(&client, &ollama_url, None, &settings.providers.ollama_model)
+        probe(&client, &ollama_url, None, &settings.providers.ollama_model),
+        probe(
+            &client,
+            &opencode_url,
+            opencode_key.as_deref(),
+            &settings.providers.opencode_model
+        )
     );
 
     let _ = app;
@@ -153,6 +181,16 @@ pub async fn test_providers(
             label: "Ollama".into(),
             ok: ollama.0,
             detail: ollama.1,
+        },
+        ProviderCheck {
+            id: "opencode".into(),
+            label: "OpenCode".into(),
+            ok: opencode.0,
+            detail: if opencode_key.is_none() {
+                "APIキー未設定".into()
+            } else {
+                opencode.1
+            },
         },
     ])
 }
