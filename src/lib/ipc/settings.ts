@@ -32,7 +32,12 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
   },
   stt: {
     enabled: true,
+    engine: "speech",
     language: "ja",
+    speechPath: "",
+    speechModel: "haas-ja-v1.0",
+    speechDevice: "auto",
+    speechKeywords: true,
     whisperPath: "",
     modelPath: "",
     silenceMs: 800,

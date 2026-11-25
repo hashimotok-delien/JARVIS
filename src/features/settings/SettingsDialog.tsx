@@ -26,6 +26,8 @@ import {
 } from "../../lib/ipc/assistant";
 import { logError } from "../../lib/logging";
 import { pickFile, pickFolder } from "../../lib/ipc/dialog";
+import { downloadSpeechModel, installSpeechBinary, speechModelStatus } from "../../lib/ipc/speech";
+import { SPEECH_MODEL_PROGRESS, onEvent } from "../../lib/ipc/events";
 import { MicRecorder } from "../voice/recorder";
 import { voiceEngine } from "../voice/voiceEngine";
 import WakeEnrollDialog from "../voice/WakeEnrollDialog";
@@ -33,6 +35,8 @@ import type {
   ProviderCheck,
   ProviderId,
   Settings,
+  SpeechModelProgressEvent,
+  SpeechModelStatus,
 } from "../../shared/types";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = {
@@ -257,11 +261,25 @@ export default function SettingsDialog({
   const [message, setMessage] = useState<string | null>(null);
   const [enrolling, setEnrolling] = useState(false);
   const [calibratingThreshold, setCalibratingThreshold] = useState(false);
+  const [modelStatus, setModelStatus] = useState<SpeechModelStatus | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const draftRef = useRef<Settings | null>(null);
 
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    if (!open) return;
+    void speechModelStatus().then(setModelStatus);
+    let unlisten: (() => void) | undefined;
+    void onEvent<SpeechModelProgressEvent>(SPEECH_MODEL_PROGRESS, (value) => {
+      setDownloadProgress(value.total > 0 ? value.received / value.total : 0);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -413,6 +431,46 @@ export default function SettingsDialog({
       setCalibratingThreshold(false);
     }
   };
+
+  const downloadModel = async () => {
+    setBusy(true);
+    setDownloadProgress(0);
+    try {
+      await downloadSpeechModel();
+      setModelStatus(await speechModelStatus());
+      setMessage("音声認識モデルを取得しました");
+    } catch (error) {
+      void logError("download_speech_model", error);
+      setMessage(`モデルの取得に失敗しました: ${String(error)}`);
+    } finally {
+      setDownloadProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const installBinary = async () => {
+    setBusy(true);
+    setDownloadProgress(0);
+    try {
+      const path = await installSpeechBinary();
+      if (path) {
+        patch({ stt: { ...draft.stt, speechPath: path } });
+      }
+      setMessage("speech.cpp を取得しました");
+    } catch (error) {
+      void logError("install_speech_binary", error);
+      setMessage(`speech.cpp の取得に失敗しました: ${String(error)}`);
+    } finally {
+      setDownloadProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const modelHint = modelStatus
+    ? modelStatus.present
+      ? `取得済み ${(modelStatus.bytes / 1_048_576).toFixed(0)}MB`
+      : `未取得 ${(modelStatus.expectedBytes / 1_048_576).toFixed(0)}MB`
+    : "確認中";
 
   const applyHudPreset = (preset: string) => {
     const margin = 24;
@@ -780,7 +838,7 @@ export default function SettingsDialog({
             </Row>
           </Section>
 
-          <Section title="音声入力（STT / whisper.cpp）">
+          <Section title="音声入力（STT）">
             <Row label="音声入力">
               <Switch
                 checked={draft.stt.enabled}
@@ -789,38 +847,179 @@ export default function SettingsDialog({
                 }
               />
             </Row>
-            <PathRow
-              label="whisper-cli.exe"
-              hint={settings?.sttAvailable ? "検出済み" : "未検出"}
-              title="whisper-cli.exe を選択"
-              mode="file"
-              filter="実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*"
-              value={draft.stt.whisperPath}
-              placeholder="C:\\tools\\whisper\\whisper-cli.exe"
-              onChange={(whisperPath) =>
-                patch({ stt: { ...draft.stt, whisperPath } })
-              }
-            />
-            <PathRow
-              label="ggml モデル"
-              title="Whisper モデル (*.bin) を選択"
-              mode="file"
-              filter="Whisper モデル (*.bin)|*.bin|すべてのファイル (*.*)|*.*"
-              value={draft.stt.modelPath}
-              placeholder="C:\\tools\\whisper\\ggml-small.bin"
-              onChange={(modelPath) =>
-                patch({ stt: { ...draft.stt, modelPath } })
-              }
-            />
-            <Row label="言語">
-              <input
-                value={draft.stt.language}
-                onChange={(event) =>
-                  patch({ stt: { ...draft.stt, language: event.target.value } })
-                }
-                className={`${INPUT_CLASS} w-[90px]`}
-              />
+            <Row label="認識エンジン" hint={settings?.sttDetail}>
+              <select
+                value={draft.stt.engine}
+                onChange={(event) => {
+                  const engine = event.target.value as Settings["stt"]["engine"];
+                  patch({ stt: { ...draft.stt, engine } });
+                }}
+                className={`${INPUT_CLASS} w-[210px]`}
+              >
+                <option value="speech">speech.cpp（Haas-ja・高速）</option>
+                <option value="whisper">whisper.cpp</option>
+              </select>
             </Row>
+            {draft.stt.engine === "speech" ? (
+              <>
+                <Row
+                  label="speech.exe"
+                  hint={settings?.sttAvailable ? "検出済み" : "未検出"}
+                >
+                  <span className="flex items-center gap-1">
+                    <input
+                      value={draft.stt.speechPath}
+                      onChange={(event) =>
+                        patch({
+                          stt: { ...draft.stt, speechPath: event.target.value },
+                        })
+                      }
+                      placeholder="C:\\tools\\speech\\speech.exe"
+                      title={draft.stt.speechPath}
+                      className={`${INPUT_CLASS} w-[130px]`}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const path = await pickFile({
+                          title: "speech.exe を選択",
+                          filter:
+                            "実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*",
+                        });
+                        if (path) {
+                          patch({ stt: { ...draft.stt, speechPath: path } });
+                        }
+                      }}
+                      className="shrink-0 rounded-md border border-[var(--border-strong)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+                    >
+                      <FolderOpen size={10} /> 参照
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void installBinary()}
+                      disabled={busy || downloadProgress !== null}
+                      title="speech.cpp の最新 Windows 版を取得します"
+                      className="shrink-0 rounded-md border border-[var(--accent-dim)] px-1.5 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                    >
+                      <Download size={10} /> 取得
+                    </button>
+                  </span>
+                </Row>
+                <Row label="認識モデル" hint={modelHint}>
+                  <span className="flex items-center gap-1">
+                    <input
+                      value={draft.stt.speechModel}
+                      onChange={(event) =>
+                        patch({
+                          stt: {
+                            ...draft.stt,
+                            speechModel: event.target.value,
+                          },
+                        })
+                      }
+                      title={modelStatus?.path ?? undefined}
+                      placeholder="haas-ja-v1.0"
+                      className={`${INPUT_CLASS} w-[130px]`}
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const path = await pickFile({
+                          title: "GGUF モデルを選択",
+                          filter: "GGUF モデル (*.gguf)|*.gguf|すべてのファイル (*.*)|*.*",
+                        });
+                        if (path) {
+                          patch({ stt: { ...draft.stt, speechModel: path } });
+                        }
+                      }}
+                      className="shrink-0 rounded-md border border-[var(--border-strong)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+                    >
+                      <FolderOpen size={10} /> 参照
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadModel()}
+                      disabled={busy || downloadProgress !== null}
+                      className="shrink-0 rounded-md border border-[var(--accent-dim)] px-1.5 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)] disabled:opacity-40"
+                    >
+                      <Download size={10} /> 取得
+                    </button>
+                  </span>
+                </Row>
+                {downloadProgress !== null && (
+                  <p className="text-right text-[10px] text-[var(--accent)]">
+                    モデルをダウンロード中... {(downloadProgress * 100).toFixed(0)}%
+                  </p>
+                )}
+                <Row label="実行デバイス">
+                  <select
+                    value={draft.stt.speechDevice}
+                    onChange={(event) =>
+                      patch({
+                        stt: {
+                          ...draft.stt,
+                          speechDevice: event.target
+                            .value as Settings["stt"]["speechDevice"],
+                        },
+                      })
+                    }
+                    className={`${INPUT_CLASS} w-[120px]`}
+                  >
+                    <option value="auto">自動</option>
+                    <option value="gpu">GPU</option>
+                    <option value="cpu">CPU</option>
+                  </select>
+                </Row>
+                <Row
+                  label="起動語を語彙に登録"
+                  hint="Haas のカスタム語彙で「ジャービス」を認識"
+                >
+                  <Switch
+                    checked={draft.stt.speechKeywords}
+                    onChange={(speechKeywords) =>
+                      patch({ stt: { ...draft.stt, speechKeywords } })
+                    }
+                  />
+                </Row>
+              </>
+            ) : (
+              <>
+                <PathRow
+                  label="whisper-cli.exe"
+                  hint={settings?.sttAvailable ? "検出済み" : "未検出"}
+                  title="whisper-cli.exe を選択"
+                  mode="file"
+                  filter="実行ファイル (*.exe)|*.exe|すべてのファイル (*.*)|*.*"
+                  value={draft.stt.whisperPath}
+                  placeholder="C:\\tools\\whisper\\whisper-cli.exe"
+                  onChange={(whisperPath) =>
+                    patch({ stt: { ...draft.stt, whisperPath } })
+                  }
+                />
+                <PathRow
+                  label="ggml モデル"
+                  title="Whisper モデル (*.bin) を選択"
+                  mode="file"
+                  filter="Whisper モデル (*.bin)|*.bin|すべてのファイル (*.*)|*.*"
+                  value={draft.stt.modelPath}
+                  placeholder="C:\\tools\\whisper\\ggml-small.bin"
+                  onChange={(modelPath) =>
+                    patch({ stt: { ...draft.stt, modelPath } })
+                  }
+                />
+                <Row label="言語">
+                  <input
+                    value={draft.stt.language}
+                    onChange={(event) =>
+                      patch({
+                        stt: { ...draft.stt, language: event.target.value },
+                      })
+                    }
+                    className={`${INPUT_CLASS} w-[90px]`}
+                  />
+                </Row>
+              </>
+            )}
             <Row label="無音判定（ms）">
               <input
                 type="number"

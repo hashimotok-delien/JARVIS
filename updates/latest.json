@@ -1,7 +1,7 @@
 {
-  "version": "0.3.1",
+  "version": "0.4.0",
   "releasedAt": "2026-11-25",
-  "notes": "ウェイクワード登録を5回のウィザード形式に変更、更新元フォルダの指定と監視、ファイル/フォルダ選択ダイアログを追加",
-  "installer": "JARVIS_0.3.1_x64-setup.exe",
+  "notes": "音声認識をspeech.cpp + Haas-ja-v1.0に刷新（常駐ワーカー・カスタム語彙）。モデル/実行ファイルの取得ボタンとエンジン切替を追加",
+  "installer": "JARVIS_0.4.0_x64-setup.exe",
   "url": ""
 }

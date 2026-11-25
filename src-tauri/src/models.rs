@@ -11,6 +11,23 @@ const LEGACY_DEFAULT_SYSTEM_PROMPT: &str = concat!(
     "日本語で回答し、要点から述べてから補足します。"
 );
 
+/// speech.cpp model name used when no explicit file is configured.
+pub const DEFAULT_SPEECH_MODEL: &str = "haas-ja-v1.0";
+/// File name of the recommended Haas-ja Q8_0 weights.
+pub const HAAS_MODEL_FILE: &str = "Haas-616M-ja-v1.0-Q8_0.gguf";
+/// Byte length of `HAAS_MODEL_FILE`, used to verify a download.
+pub const HAAS_MODEL_BYTES: u64 = 656_381_472;
+
+fn clean_path(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(512)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -161,7 +178,17 @@ impl Default for TtsSettings {
 #[serde(rename_all = "camelCase", default)]
 pub struct SttSettings {
     pub enabled: bool,
+    /// "speech" (speech.cpp + Haas-ja) or "whisper" (whisper.cpp).
+    pub engine: String,
     pub language: String,
+    /// Absolute or relative path to speech.exe (speech.cpp).
+    pub speech_path: String,
+    /// Model name for speech.cpp, or a path to a .gguf file.
+    pub speech_model: String,
+    /// "auto", "gpu" or "cpu".
+    pub speech_device: String,
+    /// Feed enrolled wake phrases to Haas as a custom vocabulary.
+    pub speech_keywords: bool,
     /// Absolute or relative path to whisper-cli.exe.
     pub whisper_path: String,
     /// Absolute or relative path to a ggml model (e.g. ggml-small.bin).
@@ -183,7 +210,12 @@ impl Default for SttSettings {
     fn default() -> Self {
         Self {
             enabled: true,
+            engine: "speech".into(),
             language: "ja".into(),
+            speech_path: String::new(),
+            speech_model: String::new(),
+            speech_device: "auto".into(),
+            speech_keywords: true,
             whisper_path: String::new(),
             model_path: String::new(),
             silence_ms: 800,
@@ -474,6 +506,19 @@ impl Settings {
             .trim()
             .to_string();
         self.updates.poll_seconds = self.updates.poll_seconds.clamp(15, 3600);
+        if self.stt.engine != "whisper" {
+            self.stt.engine = "speech".into();
+        }
+        if !matches!(self.stt.speech_device.as_str(), "gpu" | "cpu") {
+            self.stt.speech_device = "auto".into();
+        }
+        self.stt.speech_path = clean_path(&self.stt.speech_path);
+        self.stt.speech_model = clean_path(&self.stt.speech_model);
+        if self.stt.speech_model.is_empty() {
+            self.stt.speech_model = DEFAULT_SPEECH_MODEL.into();
+        }
+        self.stt.whisper_path = clean_path(&self.stt.whisper_path);
+        self.stt.model_path = clean_path(&self.stt.model_path);
         self.stt.silence_ms = self.stt.silence_ms.clamp(200, 5000);
         self.stt.threshold = self.stt.threshold.clamp(0.002, 0.4);
         let mut wake_samples = Vec::new();

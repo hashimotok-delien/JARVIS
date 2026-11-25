@@ -11,6 +11,7 @@ pub mod data;
 pub mod dialog;
 pub mod memory;
 pub mod settings;
+pub mod speech;
 pub mod threads;
 pub mod tools;
 pub mod update;

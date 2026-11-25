@@ -71,6 +71,11 @@ pub fn log_dir() -> PathBuf {
         .join("logs")
 }
 
+/// Directory that holds downloadable models such as the Haas-ja GGUF.
+pub fn models_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("models")
+}
+
 /// Candidate folders that may contain `latest.json` (update manifest).
 ///
 /// `custom` is the folder configured in settings and always wins so the user

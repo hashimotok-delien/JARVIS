@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use crate::speech::worker::SpeechWorker;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceSnapshot {
@@ -31,6 +33,8 @@ pub struct AppState {
     pub previous_version: Mutex<Option<String>>,
     /// Pending tool approvals awaiting a user decision.
     pub approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// Long-lived speech.cpp worker that keeps the recognizer loaded.
+    pub asr_worker: Mutex<Option<SpeechWorker>>,
 }
 
 impl AppState {
@@ -43,6 +47,7 @@ impl AppState {
             data_dir,
             previous_version: Mutex::new(None),
             approvals: Mutex::new(HashMap::new()),
+            asr_worker: Mutex::new(None),
         }
     }
 }

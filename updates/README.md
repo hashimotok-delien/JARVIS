@@ -30,15 +30,15 @@
    - `package.json` の `version`
 2. `npm run tauri build` でビルド
 3. インストーラをこのフォルダへコピー
-   - 例: `updates/JARVIS_0.3.1_x64-setup.exe`
+   - 例: `updates/JARVIS_0.4.0_x64-setup.exe`
 4. `latest.json` を更新
 
 ```json
 {
-  "version": "0.3.1",
+  "version": "0.4.0",
   "releasedAt": "2026-11-25",
-  "notes": "ウェイクワード登録ウィザード、更新元フォルダ指定、ファイル/フォルダ選択を追加",
-  "installer": "JARVIS_0.3.1_x64-setup.exe",
+  "notes": "音声認識をspeech.cpp + Haas-ja-v1.0に刷新",
+  "installer": "JARVIS_0.4.0_x64-setup.exe",
   "url": ""
 }
 ```

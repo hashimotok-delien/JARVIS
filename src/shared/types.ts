@@ -110,7 +110,12 @@ export interface TtsSettings {
 
 export interface SttSettings {
   enabled: boolean;
+  engine: "speech" | "whisper";
   language: string;
+  speechPath: string;
+  speechModel: string;
+  speechDevice: "auto" | "gpu" | "cpu";
+  speechKeywords: boolean;
   whisperPath: string;
   modelPath: string;
   silenceMs: number;
@@ -119,6 +124,19 @@ export interface SttSettings {
   wakeSamples: string[];
   followUpMs: number;
   wakeWatch: boolean;
+}
+
+export interface SpeechModelStatus {
+  path: string;
+  present: boolean;
+  bytes: number;
+  expectedBytes: number;
+  url: string;
+}
+
+export interface SpeechModelProgressEvent {
+  received: number;
+  total: number;
 }
 
 export interface McpServer {

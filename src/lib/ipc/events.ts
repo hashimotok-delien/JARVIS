@@ -39,3 +39,4 @@ export const TOOL_STATUS = "tool://status";
 export const TIMER_FIRED = "timer://fired";
 export const MEMORY_UPDATED = "memory://updated";
 export const QUICK_PROMPT = "quick://prompt";
+export const SPEECH_MODEL_PROGRESS = "speech://model-progress";

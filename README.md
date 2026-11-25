@@ -37,12 +37,43 @@ ollama serve
 
 既定の接続先は `http://127.0.0.1:11434`（設定で変更可）。
 
-### 3. whisper.cpp（音声入力）
+### 3. 音声入力（STT）
+
+日本語の音声認識は **speech.cpp + Haas-ja-v1.0** を既定にしています。
+設定画面の「取得」から実行ファイルとモデルを落とすだけで使えます。
+
+#### A. speech.cpp（既定・推奨）
+
+1. 設定 → **音声入力（STT）** の「認識エンジン」で
+   `speech.cpp（Haas-ja・高速）` を選びます。
+2. 「speech.exe」の **「取得」** を押すと、speech.cpp の最新 Windows 版
+   （Vulkan ビルド）を `usr\bin\speech.exe` に配置します。
+3. 「認識モデル」の **「取得」** を押すと、Haas-ja-v1.0 Q8_0（約626 MiB）を
+   `usr\models\Haas-616M-ja-v1.0-Q8_0.gguf` に保存します。
+4. 保存すると次の文字起こしから使われます。初回だけウォームアップに
+   数秒かかり、以降は常駐ワーカーが応答します。
+
+実測値（RTX 3060 Ti / Vulkan、Q8_0）:
+
+| 項目 | 時間 |
+|---|---|
+| ワーカー起動（ウォームアップ込み） | 約1.8秒 |
+| 1発話（1.5秒の音声） | 約43ms |
+| 1発話（6秒の音声） | 約80〜105ms |
+
+- 起動語「ジャービス」は Haas のカスタム語彙に自動登録されます
+  （設定の「起動語を語彙に登録」）。「じゃあびす」などの聞き取りも
+  表記ゆれとして吸収されます。
+- speech.cpp が見つからない・失敗した場合は whisper.cpp に自動で切り替わります。
+- GPU が Vulkan 非対応の場合は「実行デバイス」を `CPU` にしてください
+  （CPU でも 1発話あたり 1 秒未満で認識できます）。
+
+#### B. whisper.cpp（代替）
 
 whisper.cpp はソースコードだけでは音声入力に使えません。JARVIS には
 `whisper-cli.exe` と Whisper モデル（`.bin`）の両方が必要です。
 
-#### A. whisper-cli.exe を用意する
+##### B-1. whisper-cli.exe を用意する
 
 GitHub の [Releases](https://github.com/ggml-org/whisper.cpp/releases)
 に Windows 用の実行ファイルが添付されていない場合は、手元のソースから
@@ -77,7 +108,7 @@ GitHub の [Releases](https://github.com/ggml-org/whisper.cpp/releases)
    確認してください。`build-msvc` を以前に別コンパイラで作成していた場合は、
    そのフォルダを削除してから上記の configure コマンドをやり直してください。
 
-#### B. 日本語モデルをダウンロードする
+##### B-2. 日本語モデルをダウンロードする
 
 ソースフォルダにあるモデル取得スクリプトを使います。
 
@@ -92,11 +123,12 @@ Set-Location 'C:\MyProgram\whisper.cpp-1.9.6'
 サイズは約466 MiB）。英語専用の `small.en` は選ばないでください。
 `for-tests-ggml-small.bin` はテスト用の空ファイルなので使用できません。
 
-#### C. JARVIS にファイルの場所を設定する
+##### B-3. JARVIS にファイルの場所を設定する
 
 1. JARVIS を起動し、歯車アイコンから設定を開きます。
-2. **音声入力（STT / whisper.cpp）**で「音声入力」を有効にします。
-3. 「whisper-cli.exe」の「参照」を押し、手順 A で確認した exe を選びます。
+2. **音声入力（STT）**で「音声入力」を有効にし、認識エンジンを
+   `whisper.cpp` に切り替えます。
+3. 「whisper-cli.exe」の「参照」を押し、手順 B-1 で確認した exe を選びます。
 4. 「ggml モデル」の「参照」を押し、次のモデルファイルを選びます。
    `C:\MyProgram\whisper.cpp-1.9.6\models\ggml-small.bin`
 5. 設定を保存し、音声入力を試します。
@@ -120,7 +152,7 @@ npm run tauri build
 ```
 
 - 単体 exe: `src-tauri/target/release/jarvis.exe`
-- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.3.1_x64-setup.exe`
+- インストーラ: `src-tauri/target/release/bundle/nsis/JARVIS_0.4.0_x64-setup.exe`
 
 ## インストール
 
@@ -165,9 +197,9 @@ v0.2.0より前のアプリはリポジトリ内フォルダを確認しない�
 最初のv0.2.0への更新だけはインストーラを手動で実行してください。
 
 1. `latest.json` の `version` を新バージョンにし、`installer` にインストーラのファイル名を書く
-2. 同じフォルダにインストーラ（例: `JARVIS_0.3.1_x64-setup.exe`）を置く
+2. 同じフォルダにインストーラ（例: `JARVIS_0.4.0_x64-setup.exe`）を置く
 3. アプリ再起動（または設定 → アップデート → 再確認）
-4. ヘッダーに「更新 v0.3.1」が出る → 設定 → 「インストーラを起動」
+4. ヘッダーに「更新 v0.4.0」が出る → 設定 → 「インストーラを起動」
 
 インストーラ起動時にアプリは自動終了し、更新後は `usr` のデータを引き継いで再起動できます。
 更新後は初回起動時に前回と現在のバージョンを通知します。
@@ -211,6 +243,7 @@ v0.2.0より前のアプリはリポジトリ内フォルダを確認しない�
 - HUDは固定位置・幅・高さを設定でき、ウェイクワード後は前面に表示
 - 起動語は whisper.cpp の文字起こし結果で判定するため、専用検出器ではありません
 - 読み上げが有効なら起動時に挨拶し、設定の「呼び名」を「〇〇様」に反映
+- 音声認識は speech.cpp の常駐ワーカーで Haas-ja-v1.0 を利用（失敗時は whisper.cpp へ）
 - 読み上げは edge-tts。失敗時は Windows SAPI に自動フォールバック
 - Edge TTS は更新された認証プロトコルを持つ edge-tts-rust を使用
 - メインウィンドウを閉じてもトレイに常駐（終了はトレイメニューから）
@@ -222,7 +255,7 @@ v0.2.0より前のアプリはリポジトリ内フォルダを確認しない�
 |---|---|---|
 | P0 | 環境構築・雛形・HUD 骨格 | 完了 |
 | P1 | テキストチャット（Gemini → Ollama）＋履歴保存 | 完了 |
-| P2 | 音声入力（whisper.cpp）＋音声出力（edge-tts/SAPI） | 完了（要 whisper バイナリ配置） |
+| P2 | 音声入力（speech.cpp + Haas-ja-v1.0 / whisper.cpp）＋音声出力（edge-tts/SAPI） | 完了 |
 | P3 | 常駐・トレイ・HUD・VAD ハンズフリー | 完了 |
 | P3.5 | 指定フォルダへのインストール・`usr` データ領域・ローカル更新通知 | 完了 |
 | P4 | 添付・長期記憶 | 完了（v0.3.0） |

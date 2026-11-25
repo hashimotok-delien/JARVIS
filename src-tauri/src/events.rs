@@ -16,6 +16,14 @@ pub const TOOL_STATUS: &str = "tool://status";
 pub const TIMER_FIRED: &str = "timer://fired";
 pub const MEMORY_UPDATED: &str = "memory://updated";
 pub const QUICK_PROMPT: &str = "quick://prompt";
+pub const SPEECH_MODEL_PROGRESS: &str = "speech://model-progress";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechModelProgress {
+    pub received: u64,
+    pub total: u64,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

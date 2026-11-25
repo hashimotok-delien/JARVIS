@@ -378,6 +378,9 @@ pub fn run() {
             commands::update::open_update_dir,
             commands::dialog::pick_file,
             commands::dialog::pick_folder,
+            commands::speech::speech_model_status,
+            commands::speech::download_speech_model,
+            commands::speech::install_speech_binary,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -389,6 +392,7 @@ pub fn run() {
 
             let settings = commands::read_settings_from(handle);
             commands::app::apply_hud_options(handle, &settings);
+            crate::speech::stt::warm_up(handle);
 
             if settings.start_minimized {
                 if let Some(main) = handle.get_webview_window("main") {
