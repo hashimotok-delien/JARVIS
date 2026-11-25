@@ -128,6 +128,8 @@ export interface SttSettings {
   wakeSamples: string[];
   followUpMs: number;
   wakeWatch: boolean;
+  denoise: boolean;
+  normalize: boolean;
 }
 
 export interface SpeechModelStatus {
@@ -183,6 +185,25 @@ export interface UpdateSettings {
   pollSeconds: number;
 }
 
+export interface LocalService {
+  name: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  healthUrl: string;
+  autoStart: boolean;
+  stopOnExit: boolean;
+  enabled: boolean;
+}
+
+export interface ServiceStatus {
+  name: string;
+  enabled: boolean;
+  running: boolean;
+  owned: boolean;
+  detail: string;
+}
+
 export interface HudSettings {
   clickThrough: boolean;
   opacity: number;
@@ -207,6 +228,7 @@ export interface Settings {
   memory: MemorySettings;
   ui: UiSettings;
   updates: UpdateSettings;
+  services: LocalService[];
 }
 
 export interface SettingsPayload extends Settings {

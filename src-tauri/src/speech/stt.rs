@@ -322,6 +322,19 @@ fn is_degenerate_transcript(text: &str) -> bool {
 
 pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<String, String> {
     let engine = active_engine(app, settings);
+    // Clean up the audio before any engine sees it (noise gate + AGC).
+    let processed = if settings.stt.denoise || settings.stt.normalize {
+        match crate::speech::dsp::process_wav(wav, settings.stt.denoise, settings.stt.normalize) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                crate::log_message("WARN", "stt", &format!("dsp failed: {error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let wav: &[u8] = processed.as_deref().unwrap_or(wav);
     let result = match engine {
         "speech" => match transcribe_speech(app, settings, wav) {
             Ok(text) => Ok(text),

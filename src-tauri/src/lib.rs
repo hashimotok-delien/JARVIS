@@ -5,6 +5,7 @@ mod models;
 mod paths;
 mod providers;
 mod secrets;
+mod services;
 mod speech;
 mod state;
 mod status;
@@ -380,6 +381,11 @@ pub fn run() {
             commands::update::open_update_dir,
             commands::dialog::pick_file,
             commands::dialog::pick_folder,
+            commands::services::list_local_services,
+            commands::services::start_local_service,
+            commands::services::stop_local_service,
+            commands::services::start_all_local_services,
+            commands::services::stop_all_local_services,
             commands::speech::speech_model_status,
             commands::speech::download_speech_model,
             commands::speech::install_speech_binary,
@@ -401,6 +407,19 @@ pub fn run() {
             let settings = commands::read_settings_from(handle);
             commands::app::apply_hud_options(handle, &settings);
             crate::speech::stt::warm_up(handle);
+            services::start_auto(handle);
+
+            // Debug-only hook used by the smoke test to exercise graceful exit.
+            #[cfg(debug_assertions)]
+            if let Ok(value) = std::env::var("JARVIS_DEBUG_EXIT_MS") {
+                if let Ok(ms) = value.parse::<u64>() {
+                    let handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                        handle.exit(0);
+                    });
+                }
+            }
 
             if settings.start_minimized {
                 if let Some(main) = handle.get_webview_window("main") {
@@ -417,10 +436,15 @@ pub fn run() {
             );
             Ok(())
         })
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(error) = result {
-        log_message("ERROR", "startup", &error.to_string());
+    match result {
+        Ok(app) => app.run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                services::stop_all(app_handle);
+            }
+        }),
+        Err(error) => log_message("ERROR", "startup", &error.to_string()),
     }
 }
 

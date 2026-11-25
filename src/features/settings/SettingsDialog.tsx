@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import LocalServicesSettings from "./LocalServicesSettings";
 import { settingsStore, useSettings } from "./settingsStore";
 import { updateStore, useUpdate } from "../update/updateStore";
 import {
@@ -84,6 +85,10 @@ function toDraft(source: Settings): Settings {
     memory: { ...source.memory },
     ui: { ...source.ui },
     updates: { ...source.updates },
+    services: source.services.map((service) => ({
+      ...service,
+      args: [...service.args],
+    })),
   };
 }
 
@@ -155,6 +160,7 @@ const SETTINGS_SECTIONS = [
   { id: "tts", label: "音声出力" },
   { id: "stt", label: "音声入力" },
   { id: "tools", label: "ツール実行" },
+  { id: "services", label: "ローカルサービス" },
   { id: "memory", label: "長期記憶" },
   { id: "display", label: "表示 / 通知" },
   { id: "data", label: "データ" },
@@ -1311,6 +1317,28 @@ export default function SettingsDialog({
               </button>
             </div>
             <Row
+              label="ノイズ除去（前処理）"
+              hint="低周波・高周波ノイズと定常ノイズを抑えます"
+            >
+              <Switch
+                checked={draft.stt.denoise}
+                onChange={(denoise) =>
+                  patch({ stt: { ...draft.stt, denoise } })
+                }
+              />
+            </Row>
+            <Row
+              label="音量の一定化（前処理）"
+              hint="小さい声を自動で持ち上げ、大きすぎる声を抑えます"
+            >
+              <Switch
+                checked={draft.stt.normalize}
+                onChange={(normalize) =>
+                  patch({ stt: { ...draft.stt, normalize } })
+                }
+              />
+            </Row>
+            <Row
               label="ハンズフリー（VAD 自動ターン交代）"
               hint="有効時に待機。起動語はJARVIS"
             >
@@ -1675,6 +1703,13 @@ export default function SettingsDialog({
                 }
               />
             </Row>
+          </Section>
+
+          <Section id="settings-services" title="ローカルサービス">
+            <LocalServicesSettings
+              services={draft.services}
+              onChange={(services) => patch({ services })}
+            />
           </Section>
 
           <Section id="settings-data" title="データ">

@@ -214,6 +214,10 @@ pub struct SttSettings {
     pub follow_up_ms: u32,
     /// Continuously poll short audio windows for the wake word while idle.
     pub wake_watch: bool,
+    /// High-pass/low-pass filtering plus a noise gate before recognition.
+    pub denoise: bool,
+    /// Loudness normalization (AGC) before recognition.
+    pub normalize: bool,
 }
 
 impl Default for SttSettings {
@@ -235,6 +239,8 @@ impl Default for SttSettings {
             wake_samples: Vec::new(),
             follow_up_ms: 12_000,
             wake_watch: false,
+            denoise: true,
+            normalize: true,
         }
     }
 }
@@ -382,6 +388,37 @@ impl Default for UpdateSettings {
     }
 }
 
+/// A locally-run helper process (Ollama, opencode web, ...) that JARVIS can
+/// start on launch and stop on exit when it spawned it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LocalService {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: String,
+    /// Optional URL that is polled until the service answers.
+    pub health_url: String,
+    pub auto_start: bool,
+    pub stop_on_exit: bool,
+    pub enabled: bool,
+}
+
+impl Default for LocalService {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            command: String::new(),
+            args: Vec::new(),
+            cwd: String::new(),
+            health_url: String::new(),
+            auto_start: true,
+            stop_on_exit: true,
+            enabled: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -398,6 +435,7 @@ pub struct Settings {
     pub memory: MemorySettings,
     pub ui: UiSettings,
     pub updates: UpdateSettings,
+    pub services: Vec<LocalService>,
 }
 
 impl Default for Settings {
@@ -416,6 +454,7 @@ impl Default for Settings {
             memory: MemorySettings::default(),
             ui: UiSettings::default(),
             updates: UpdateSettings::default(),
+            services: Vec::new(),
         }
     }
 }
@@ -589,6 +628,79 @@ impl Settings {
         self.hud.height = self.hud.height.clamp(208, 1080);
         self.hud.position_x = self.hud.position_x.clamp(-16_384, 16_384);
         self.hud.position_y = self.hud.position_y.clamp(-16_384, 16_384);
+
+        self.services = std::mem::take(&mut self.services)
+            .into_iter()
+            .filter_map(|service| {
+                let command = service.command.trim().to_string();
+                if command.is_empty() {
+                    return None;
+                }
+                let mut name: String = service
+                    .name
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .take(40)
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+                if name.is_empty() {
+                    name = command
+                        .chars()
+                        .filter(|character| {
+                            character.is_ascii_alphanumeric()
+                                || *character == '-'
+                                || *character == '_'
+                        })
+                        .take(40)
+                        .collect();
+                }
+                if name.is_empty() {
+                    return None;
+                }
+                let health_url = service.health_url.trim().to_string();
+                let health_url = if health_url.starts_with("http://")
+                    || health_url.starts_with("https://")
+                {
+                    health_url
+                } else {
+                    String::new()
+                };
+                Some(LocalService {
+                    name,
+                    command,
+                    args: service
+                        .args
+                        .into_iter()
+                        .map(|arg| {
+                            arg.trim()
+                                .chars()
+                                .filter(|character| !character.is_control())
+                                .take(300)
+                                .collect::<String>()
+                        })
+                        .filter(|arg| !arg.is_empty())
+                        .take(20)
+                        .collect(),
+                    cwd: clean_path(&service.cwd),
+                    health_url,
+                    auto_start: service.auto_start,
+                    stop_on_exit: service.stop_on_exit,
+                    enabled: service.enabled,
+                })
+            })
+            .take(10)
+            .collect();
+
+        let mut seen: Vec<String> = Vec::new();
+        self.services.retain(|service| {
+            if seen.iter().any(|name| name == &service.name) {
+                false
+            } else {
+                seen.push(service.name.clone());
+                true
+            }
+        });
         self
     }
 
@@ -711,6 +823,39 @@ mod tests {
 
         assert_eq!(settings.updates.folder, "D:\\repo\\updates");
         assert_eq!(settings.updates.poll_seconds, 15);
+    }
+
+    #[test]
+    fn local_services_are_sanitized_and_deduplicated() {
+        let settings = Settings {
+            services: vec![
+                LocalService {
+                    name: " ollama ".into(),
+                    command: " ollama ".into(),
+                    args: vec!["serve".into(), " ".into()],
+                    health_url: "file:///etc/passwd".into(),
+                    ..LocalService::default()
+                },
+                LocalService {
+                    name: "ollama".into(),
+                    command: "other".into(),
+                    ..LocalService::default()
+                },
+                LocalService {
+                    name: "".into(),
+                    command: "".into(),
+                    ..LocalService::default()
+                },
+            ],
+            ..Settings::default()
+        }
+        .sanitized();
+
+        assert_eq!(settings.services.len(), 1);
+        assert_eq!(settings.services[0].name, "ollama");
+        assert_eq!(settings.services[0].command, "ollama");
+        assert_eq!(settings.services[0].args, vec!["serve".to_string()]);
+        assert!(settings.services[0].health_url.is_empty());
     }
 
     #[test]

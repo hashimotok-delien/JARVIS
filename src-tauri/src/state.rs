@@ -35,6 +35,8 @@ pub struct AppState {
     pub approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     /// Long-lived speech.cpp worker that keeps the recognizer loaded.
     pub asr_worker: Mutex<Option<SpeechWorker>>,
+    /// Services spawned by JARVIS (owned) keyed by configured name.
+    pub services: Mutex<HashMap<String, std::process::Child>>,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
             previous_version: Mutex::new(None),
             approvals: Mutex::new(HashMap::new()),
             asr_worker: Mutex::new(None),
+            services: Mutex::new(HashMap::new()),
         }
     }
 }

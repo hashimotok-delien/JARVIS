@@ -50,6 +50,8 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     wakeSamples: [],
     followUpMs: 12000,
     wakeWatch: false,
+    denoise: true,
+    normalize: true,
   },
   hud: {
     clickThrough: false,
@@ -85,6 +87,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     hudPreset: "custom",
     clipboardWatch: false,
   },
+  services: [],
   updates: {
     folder: "",
     watch: true,

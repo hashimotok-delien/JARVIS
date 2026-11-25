@@ -1,7 +1,7 @@
 {
-  "version": "0.4.4",
+  "version": "0.4.6",
   "releasedAt": "2026-11-25",
-  "notes": "ハンズフリーで回答後に起動語なしで反応する問題を修正。トレイ/タスクバー状態色、OpenCode Go、設定2ペイン化を含む",
-  "installer": "JARVIS_0.4.4_x64-setup.exe",
+  "notes": "音声認識の前処理（ノイズ除去・音量の一定化）を追加。ローカルサービス管理を含む",
+  "installer": "JARVIS_0.4.6_x64-setup.exe",
   "url": ""
 }
