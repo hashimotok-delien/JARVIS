@@ -203,6 +203,9 @@ pub struct SttSettings {
     pub whisper_path: String,
     /// Absolute or relative path to a ggml model (e.g. ggml-small.bin).
     pub model_path: String,
+    /// Optional initial prompt passed to whisper.cpp (`--prompt`).
+    /// Empty disables the wake-word prompt so free speech is not biased.
+    pub whisper_prompt: String,
     /// Silence duration that ends an utterance.
     pub silence_ms: u32,
     /// RMS threshold for voice activity detection (0..1).
@@ -235,6 +238,7 @@ impl Default for SttSettings {
             speech_keywords: true,
             whisper_path: String::new(),
             model_path: String::new(),
+            whisper_prompt: String::new(),
             silence_ms: 800,
             threshold: 0.02,
             hands_free: false,
@@ -606,6 +610,15 @@ impl Settings {
         }
         self.stt.whisper_path = clean_path(&self.stt.whisper_path);
         self.stt.model_path = clean_path(&self.stt.model_path);
+        self.stt.whisper_prompt = self
+            .stt
+            .whisper_prompt
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(200)
+            .collect::<String>()
+            .trim()
+            .to_string();
         self.stt.silence_ms = self.stt.silence_ms.clamp(200, 5000);
         self.stt.threshold = self.stt.threshold.clamp(0.002, 0.4);
         let mut wake_samples = Vec::new();

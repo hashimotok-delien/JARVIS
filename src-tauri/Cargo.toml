@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.5.0"
+version = "0.5.1"
 description = "J.A.R.V.I.S. - AI conversation desktop app"
 authors = ["hashimotok0808"]
 edition = "2024"

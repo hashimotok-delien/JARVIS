@@ -161,6 +161,7 @@ pub fn keyword_line(settings: &Settings) -> String {
     format!("ジャービス={}", unique.join(","))
 }
 
+#[cfg(test)]
 fn wake_prompt(settings: &Settings) -> String {
     let mut phrases = vec![
         "JARVIS".to_string(),
@@ -307,6 +308,43 @@ pub fn availability(app: &AppHandle, settings: &Settings) -> (bool, String) {
 /// Whisper (especially the small model) and noisy recordings can produce a
 /// single syllable repeated over and over, e.g. "ババババババ". Treat that as a
 /// failed recognition instead of showing nonsense to the user.
+const HALLUCINATION_PHRASES: &[&str] = &[
+    "ご視聴ありがとうございました",
+    "ご視聴いただきありがとうございました",
+    "チャンネル登録",
+    "高評価",
+    "字幕",
+    "おやすみなさい",
+    "thanksforwatching",
+    "thankyouforwatching",
+];
+
+/// Whisper invents stock phrases on silence or noise. Reject them unless the
+/// audio clearly contains speech.
+fn looks_like_hallucination(
+    text: &str,
+    metrics: Option<crate::speech::dsp::AudioMetrics>,
+) -> bool {
+    let normalized: String = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .to_lowercase();
+    if normalized.chars().count() > 60 {
+        return false;
+    }
+    let hit = HALLUCINATION_PHRASES
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+    if !hit {
+        return false;
+    }
+    match metrics {
+        Some(metrics) => metrics.speech_ratio < 0.25 || metrics.duration_ms < 1_200,
+        None => true,
+    }
+}
+
 fn is_degenerate_transcript(text: &str) -> bool {
     let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
     if chars.len() < 8 {
@@ -340,7 +378,7 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
     let engine = active_engine(app, settings);
 
     // Preprocess once so every engine and retry sees the same cleaned audio.
-    let (wav_buffer, metrics) = if settings.stt.denoise || settings.stt.normalize {
+    let (processed, mut metrics) = if settings.stt.denoise || settings.stt.normalize {
         match crate::speech::dsp::process_wav(
             wav,
             settings.stt.denoise,
@@ -362,6 +400,11 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
             crate::speech::dsp::wav_metrics(wav).ok(),
         )
     };
+    // Both engines expect 16 kHz mono; resample once for all retries.
+    let wav_buffer = crate::speech::dsp::ensure_16k(&processed).unwrap_or(processed);
+    if let Some(metrics) = metrics.as_mut() {
+        metrics.sample_rate = 16_000;
+    }
     let wav = wav_buffer.as_slice();
     if let Some(metrics) = metrics {
         crate::log_message(
@@ -384,6 +427,7 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
         Ok(text) => {
             text.trim().is_empty()
                 || is_degenerate_transcript(text)
+                || looks_like_hallucination(text, metrics)
                 || metrics
                     .map(|metrics| {
                         metrics.duration_ms >= 500 && metrics.speech_ratio < 0.06
@@ -420,11 +464,13 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
                 "stt",
                 &format!("engine={used} text={preview}"),
             );
-            if is_degenerate_transcript(&text) {
+            if is_degenerate_transcript(&text)
+                || looks_like_hallucination(&text, metrics)
+            {
                 crate::log_message(
                     "WARN",
                     "stt",
-                    &format!("degenerate transcript rejected (engine={used})"),
+                    &format!("suspect transcript rejected (engine={used})"),
                 );
                 Err(
                     "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
@@ -531,13 +577,14 @@ fn transcribe_whisper(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Resul
         .arg("-f")
         .arg(&wav_path)
         .arg("-l")
-        .arg(&settings.stt.language)
-        .arg("--prompt")
-        .arg(wake_prompt(settings))
-        .arg("-nt")
-        .arg("-otxt")
-        .arg("-of")
-        .arg(&out_base);
+        .arg(&settings.stt.language);
+    // Do not bias free speech with the wake-word prompt. A long custom prompt
+    // can be set explicitly when the user wants domain vocabulary.
+    let prompt = settings.stt.whisper_prompt.trim();
+    if !prompt.is_empty() {
+        command.arg("--prompt").arg(prompt);
+    }
+    command.arg("-nt").arg("-otxt").arg("-of").arg(&out_base);
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);

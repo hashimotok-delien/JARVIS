@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     speechKeywords: true,
     whisperPath: "",
     modelPath: "",
+    whisperPrompt: "",
     silenceMs: 800,
     threshold: 0.02,
     handsFree: false,

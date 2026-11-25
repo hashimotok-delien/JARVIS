@@ -35,6 +35,30 @@ impl AudioMetrics {
     }
 }
 
+/// Resample a 16-bit mono WAV to 16 kHz (linear interpolation).
+pub fn ensure_16k(wav: &[u8]) -> Result<Vec<u8>, String> {
+    let (pcm, rate) = crate::speech::stt::wav_pcm(wav)?;
+    if rate == 16_000 {
+        return Ok(wav.to_vec());
+    }
+    let samples = decode(&pcm);
+    if samples.is_empty() {
+        return Ok(encode_wav(&samples, 16_000));
+    }
+    let ratio = rate as f64 / 16_000.0;
+    let target_len = ((samples.len() as f64) / ratio).round().max(1.0) as usize;
+    let mut output = Vec::with_capacity(target_len);
+    for index in 0..target_len {
+        let position = index as f64 * ratio;
+        let base = position.floor() as usize;
+        let fraction = (position - base as f64) as f32;
+        let a = samples[base.min(samples.len() - 1)];
+        let b = samples[(base + 1).min(samples.len() - 1)];
+        output.push(a + (b - a) * fraction);
+    }
+    Ok(encode_wav(&output, 16_000))
+}
+
 /// Metrics for a WAV without modifying it.
 pub fn wav_metrics(wav: &[u8]) -> Result<AudioMetrics, String> {
     let (pcm, rate) = crate::speech::stt::wav_pcm(wav)?;
@@ -369,6 +393,23 @@ mod tests {
         let input_noise = rms_of(&input, 0, RATE);
         let output_noise = rms_of(&output, 0, RATE);
         assert!(output_noise < input_noise * 0.6);
+    }
+
+    #[test]
+    fn resamples_48k_to_16k() {
+        const RATE: usize = 48_000;
+        let samples: Vec<f32> = (0..RATE)
+            .map(|index| {
+                (2.0 * PI * 440.0 * index as f32 / RATE as f32).sin() * 0.2
+            })
+            .collect();
+        let input = wav_from(&samples, RATE as u32);
+        let output = ensure_16k(&input).unwrap();
+        let (pcm, rate) = crate::speech::stt::wav_pcm(&output).unwrap();
+
+        assert_eq!(rate, 16_000);
+        let frames = pcm.len() / 2;
+        assert!((frames as i64 - 16_000).abs() < 16);
     }
 
     #[test]

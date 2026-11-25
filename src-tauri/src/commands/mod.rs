@@ -17,6 +17,7 @@ pub mod threads;
 pub mod tools;
 pub mod update;
 pub mod voice;
+pub mod voice_lab;
 
 pub fn read_settings(state: &AppState) -> Settings {
     let conn = state

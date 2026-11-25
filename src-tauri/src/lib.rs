@@ -389,6 +389,12 @@ pub fn run() {
             commands::speech::speech_model_status,
             commands::speech::download_speech_model,
             commands::speech::install_speech_binary,
+            commands::voice_lab::save_voice_test,
+            commands::voice_lab::list_voice_tests,
+            commands::voice_lab::read_voice_test_audio,
+            commands::voice_lab::delete_voice_test,
+            commands::voice_lab::run_voice_test,
+            commands::voice_lab::list_whisper_models,
         ])
         .setup(|app| {
             let handle = app.handle();

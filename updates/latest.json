@@ -1,7 +1,7 @@
 {
-  "version": "0.5.0",
+  "version": "0.5.1",
   "releasedAt": "2026-11-25",
-  "notes": "RNNoiseノイズ除去・VADトリム・音量正規化・低品質時の自動再認識を追加。ローカルサービス管理を含む",
-  "installer": "JARVIS_0.5.0_x64-setup.exe",
+  "notes": "音声テスト（録音保存・CER・モデル比較）、Whisper幻覚除去、起動語プロンプト廃止、48k→16k正規化、無音時間プリセットを追加",
+  "installer": "JARVIS_0.5.1_x64-setup.exe",
   "url": ""
 }

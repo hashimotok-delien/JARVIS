@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import LocalServicesSettings from "./LocalServicesSettings";
+import VoiceLabDialog from "../voice/VoiceLabDialog";
 import { settingsStore, useSettings } from "./settingsStore";
 import { updateStore, useUpdate } from "../update/updateStore";
 import {
@@ -288,6 +289,7 @@ export default function SettingsDialog({
   const [apiKey, setApiKey] = useState("");
   const [opencodeKey, setOpencodeKey] = useState("");
   const [activeSection, setActiveSection] = useState("providers");
+  const [voiceLabOpen, setVoiceLabOpen] = useState(false);
 
   const jumpToSection = (id: string) => {
     setActiveSection(id);
@@ -1266,6 +1268,24 @@ export default function SettingsDialog({
                     className={`${INPUT_CLASS} w-[90px]`}
                   />
                 </Row>
+                <Row
+                  label="Whisper プロンプト"
+                  hint="空欄推奨。入れると語彙を誘導します（起動語プロンプトは廃止）"
+                >
+                  <input
+                    value={draft.stt.whisperPrompt}
+                    onChange={(event) =>
+                      patch({
+                        stt: {
+                          ...draft.stt,
+                          whisperPrompt: event.target.value,
+                        },
+                      })
+                    }
+                    placeholder="（空欄）"
+                    className={INPUT_CLASS}
+                  />
+                </Row>
               </>
             )}
             <Row label="無音判定（ms）">
@@ -1286,6 +1306,33 @@ export default function SettingsDialog({
                 className={`${INPUT_CLASS} w-[90px]`}
               />
             </Row>
+            <div className="flex flex-wrap gap-1 pb-2">
+              {[800, 1200, 1500].map((ms) => (
+                <button
+                  key={ms}
+                  type="button"
+                  onClick={() =>
+                    patch({ stt: { ...draft.stt, silenceMs: ms } })
+                  }
+                  className={`rounded border px-2 py-0.5 text-[10px] transition ${
+                    draft.stt.silenceMs === ms
+                      ? "border-[var(--accent-dim)] text-[var(--accent)]"
+                      : "border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--accent)]"
+                  }`}
+                >
+                  {ms}ms
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end pb-2">
+              <button
+                type="button"
+                onClick={() => setVoiceLabOpen(true)}
+                className="rounded-md border border-[var(--accent-dim)] px-2 py-1 text-[10px] text-[var(--accent)] transition hover:bg-[var(--bg-hover)]"
+              >
+                音声テスト（録音・CER比較）を開く
+              </button>
+            </div>
             <Row label="VAD しきい値" hint="小さいほど敏感">
               <input
                 type="number"
@@ -2074,6 +2121,10 @@ export default function SettingsDialog({
           onCancel={cancelWakeEnrollment}
         />
       )}
+      <VoiceLabDialog
+        open={voiceLabOpen}
+        onClose={() => setVoiceLabOpen(false)}
+      />
     </div>
   );
 }

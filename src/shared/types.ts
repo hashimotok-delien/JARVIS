@@ -122,6 +122,7 @@ export interface SttSettings {
   speechKeywords: boolean;
   whisperPath: string;
   modelPath: string;
+  whisperPrompt: string;
   silenceMs: number;
   threshold: number;
   handsFree: boolean;
