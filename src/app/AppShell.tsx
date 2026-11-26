@@ -45,6 +45,7 @@ import {
   onEvent,
 } from "../lib/ipc/events";
 import { logError } from "../lib/logging";
+import { applyHudTheme } from "../shared/theme/palette";
 import type {
   AppInfo,
   SearchHit,
@@ -115,6 +116,7 @@ export default function AppShell() {
       "--font-scale",
       String(settings.ui.fontScale),
     );
+    applyHudTheme(settings.ui);
   }, [settings]);
 
   useEffect(() => {
@@ -568,6 +570,13 @@ export default function AppShell() {
               <p className="mt-1">
                 {usage
                   ? `平均 ${Math.round(usage.today.avgLatencyMs)}ms · ${usage.today.characters.toLocaleString()} 文字`
+                  : ""}
+              </p>
+              <p className="mt-0.5">
+                {usage
+                  ? `概算 ${Math.round(
+                      usage.today.characters / 1.6,
+                    ).toLocaleString()} トークン`
                   : ""}
               </p>
               {usage && usage.byProvider.length > 0 && (

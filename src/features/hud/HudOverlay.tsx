@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { MotionConfig, motion } from "framer-motion";
 import { Mic, Volume2, VolumeX, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import HudRing from "./HudRing";
+import Dashboard from "./DashboardPanels";
 import { HUD_STATE_META } from "./states";
+import { fetchWeather } from "./weather";
 import { isTauri, requestVoiceToggle } from "../../lib/ipc/app";
 import { listMessages, listThreads } from "../../lib/ipc/chat";
+import { systemStats, usageStats } from "../../lib/ipc/assistant";
 import { logError } from "../../lib/logging";
 import { toggleMute } from "../../lib/ipc/settings";
+import { applyHudTheme } from "../../shared/theme/palette";
 import {
   CHAT_DELTA,
   CHAT_DONE,
@@ -28,9 +32,12 @@ import type {
   ChatProviderEvent,
   ChatTitleEvent,
   HudState,
+  SystemStats,
+  UsageStats,
   VoiceSpectrumEvent,
   VoiceStateEvent,
   VoiceTranscriptEvent,
+  WeatherReport,
 } from "../../shared/types";
 
 function WaveBars({ active }: { active: boolean }) {
@@ -70,6 +77,13 @@ export default function HudOverlay() {
   const [providerModel, setProviderModel] = useState("");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [spectrum, setSpectrum] = useState<number[]>([]);
+  const [heard, setHeard] = useState("");
+  const [stats, setStats] = useState<SystemStats | null>(null);
+  const [weather, setWeather] = useState<WeatherReport | null>(null);
+  const [usage, setUsage] = useState<UsageStats | null>(null);
+
+  const expanded = (settings?.hud.width ?? 380) >= 600;
+  const staticMode = settings?.hud.staticMode ?? false;
 
   useEffect(() => {
     void settingsStore.init();
@@ -130,7 +144,13 @@ export default function HudOverlay() {
     }).then((unlisten) => unlisteners.push(unlisten));
 
     void onEvent<VoiceTranscriptEvent>(VOICE_TRANSCRIPT, (payload) => {
-      setUserInput(payload.text);
+      if (payload.isFinal) {
+        setUserInput(payload.text);
+        setHeard("");
+      } else {
+        // Wake-word probing result: show it small so misses are diagnosable.
+        setHeard(payload.text);
+      }
     }).then((unlisten) => unlisteners.push(unlisten));
 
     void onEvent<VoiceSpectrumEvent>(VOICE_SPECTRUM, (payload) => {
@@ -142,10 +162,74 @@ export default function HudOverlay() {
     };
   }, []);
 
+  // Apply the accent-derived palette (separate window, so re-apply here).
+  useEffect(() => {
+    if (!settings) return;
+    document.documentElement.dataset.theme = settings.ui.theme;
+    applyHudTheme(settings.ui);
+  }, [settings]);
+
+  // Usage: refresh once a minute while the dashboard is visible.
+  useEffect(() => {
+    if (!expanded || !settings?.hud.showUsage) return;
+    let active = true;
+    const load = () => {
+      void usageStats().then((next) => {
+        if (active) setUsage(next);
+      });
+    };
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [expanded, settings?.hud.showUsage]);
+
+  // System telemetry: cheap, so poll every 2 seconds.
+  useEffect(() => {
+    if (!expanded || !settings?.hud.showSystem) return;
+    let active = true;
+    const load = () => {
+      void systemStats().then((next) => {
+        if (active && next) setStats(next);
+      });
+    };
+    load();
+    const timer = window.setInterval(load, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [expanded, settings?.hud.showSystem]);
+
+  // Weather: Open-Meteo, cached for 10 minutes.
+  useEffect(() => {
+    if (!expanded || !settings?.hud.showWeather) return;
+    let active = true;
+    const { weatherCity, weatherLat, weatherLon } = settings.hud;
+    const load = () => {
+      void fetchWeather(weatherCity, weatherLat, weatherLon).then((next) => {
+        if (active && next) setWeather(next);
+      });
+    };
+    load();
+    const timer = window.setInterval(load, 10 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [
+    expanded,
+    settings?.hud.showWeather,
+    settings?.hud.weatherCity,
+    settings?.hud.weatherLat,
+    settings?.hud.weatherLon,
+  ]);
+
   const meta = HUD_STATE_META[state];
   const muted = settings ? !settings.tts.enabled : false;
   const listening = state === "listening";
-  const expanded = (settings?.hud.width ?? 380) >= 600;
 
   const close = () => {
     if (isTauri) {
@@ -156,16 +240,22 @@ export default function HudOverlay() {
   const visibleText = errorText ?? subtitle;
 
   return (
+    <MotionConfig reducedMotion={staticMode ? "always" : "user"}>
     <div className="flex h-full w-full items-center justify-center p-2">
       <div
-        className="flex h-full w-full flex-col overflow-hidden rounded-2xl border backdrop-blur-xl"
+        className={`flex h-full w-full flex-col overflow-hidden rounded-2xl border ${
+          staticMode ? "" : "backdrop-blur-xl"
+        }`}
         style={{
-          borderColor: "rgba(0, 229, 255, 0.22)",
+          borderColor: "color-mix(in srgb, var(--accent) 28%, transparent)",
           background:
-            "linear-gradient(150deg, rgba(10,17,26,0.92) 0%, " +
-            "rgba(6,10,16,0.86) 100%)",
+            settings?.ui.theme === "light"
+              ? "linear-gradient(150deg, rgba(255,255,255,0.95) 0%, " +
+                "rgba(240,245,250,0.90) 100%)"
+              : "linear-gradient(150deg, rgba(10,17,26,0.92) 0%, " +
+                "rgba(6,10,16,0.86) 100%)",
           boxShadow:
-            "0 0 0 1px rgba(0,229,255,0.06), " +
+            "0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent), " +
             "0 18px 40px rgba(0,0,0,0.55)",
         }}
       >
@@ -201,6 +291,7 @@ export default function HudOverlay() {
               state={state}
               size={expanded ? 132 : 88}
               spectrum={spectrum}
+              static={staticMode}
             />
           </div>
 
@@ -222,6 +313,12 @@ export default function HudOverlay() {
             {providerModel && (
               <span className="mt-0.5 text-[9px] text-[var(--text-muted)]">
                 {providerModel}
+              </span>
+            )}
+
+            {heard && state === "idle" && (
+              <span className="mt-0.5 truncate text-[9px] text-[var(--text-muted)]">
+                聞き取り: {heard}
               </span>
             )}
 
@@ -279,8 +376,18 @@ export default function HudOverlay() {
               )}
             </div>
           </div>
+
+          {expanded && settings && (
+            <Dashboard
+              hud={settings.hud}
+              stats={stats}
+              weather={weather}
+              usage={usage}
+            />
+          )}
         </div>
       </div>
     </div>
+    </MotionConfig>
   );
 }

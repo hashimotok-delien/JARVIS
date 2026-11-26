@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.5.1"
+version = "0.5.2"
 description = "J.A.R.V.I.S. - AI conversation desktop app"
 authors = ["hashimotok0808"]
 edition = "2024"
@@ -29,7 +29,14 @@ futures-util = "0.3.34"
 tokio = { version = "1.54.1", features = ["sync", "process", "time", "rt", "macros", "fs", "io-util"] }
 base64 = "0.23.1"
 uuid = { version = "1.29.3", features = ["v4"] }
-windows-sys = { version = "0.61.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Security_Cryptography",
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_Storage_FileSystem",
+] }
 reqwest = { version = "0.13.5", features = ["json", "stream"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tauri-plugin-single-instance = "2.5.5"

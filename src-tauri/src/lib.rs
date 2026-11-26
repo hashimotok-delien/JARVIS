@@ -363,6 +363,7 @@ pub fn run() {
             commands::data::truncate_from_message,
             commands::data::branch_thread,
             commands::data::usage_stats,
+            commands::system::system_stats,
             commands::data::list_templates,
             commands::data::add_template,
             commands::data::delete_template,

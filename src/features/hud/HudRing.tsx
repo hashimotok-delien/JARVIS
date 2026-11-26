@@ -7,6 +7,8 @@ interface HudRingProps {
   size?: number;
   /** Normalized frequency levels emitted while the assistant speaks. */
   spectrum?: number[];
+  /** Freeze rotation and pulsing (static/low-power mode). */
+  static?: boolean;
 }
 
 const BAR_COUNT = 32;
@@ -17,6 +19,7 @@ export default function HudRing({
   state,
   size = 112,
   spectrum,
+  static: isStatic = false,
 }: HudRingProps) {
   const meta = HUD_STATE_META[state];
   const isBusy = state === "thinking";
@@ -47,7 +50,7 @@ export default function HudRing({
       <motion.svg
         viewBox="0 0 120 120"
         className="absolute inset-0"
-        animate={{ rotate: 360 }}
+        animate={isStatic ? undefined : { rotate: 360 }}
         transition={{
           repeat: Infinity,
           duration: meta.spin,
@@ -80,7 +83,7 @@ export default function HudRing({
       <motion.svg
         viewBox="0 0 120 120"
         className="absolute inset-0"
-        animate={{ rotate: -360 }}
+        animate={isStatic ? undefined : { rotate: -360 }}
         transition={{ repeat: Infinity, duration: 22, ease: "linear" }}
       >
         <circle
@@ -136,12 +139,17 @@ export default function HudRing({
       <motion.div
         className="absolute inset-[34%] rounded-full"
         style={{ background: "currentColor" }}
-        animate={{
-          opacity: isBusy ? [0.35, 1, 0.35] : [0.7, 1, 0.7],
-          scale: state === "listening" ? [0.9, 1.08, 0.9] : [1, 1.04, 1],
-        }}
+        animate={
+          isStatic
+            ? { opacity: 0.9, scale: 1 }
+            : {
+                opacity: isBusy ? [0.35, 1, 0.35] : [0.7, 1, 0.7],
+                scale:
+                  state === "listening" ? [0.9, 1.08, 0.9] : [1, 1.04, 1],
+              }
+        }
         transition={{
-          repeat: Infinity,
+          repeat: isStatic ? 0 : Infinity,
           duration: isBusy ? 0.9 : 2.6,
           ease: "easeInOut",
         }}

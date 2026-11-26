@@ -33,6 +33,11 @@ import { SPEECH_MODEL_PROGRESS, onEvent } from "../../lib/ipc/events";
 import { MicRecorder } from "../voice/recorder";
 import { voiceEngine } from "../voice/voiceEngine";
 import WakeEnrollDialog from "../voice/WakeEnrollDialog";
+import {
+  DEFAULT_ACCENT,
+  HUD_THEMES,
+  isHexColor,
+} from "../../shared/theme/palette";
 import type {
   ProviderCheck,
   ProviderId,
@@ -1761,6 +1766,51 @@ export default function SettingsDialog({
                 <option value="bottom-right">右下</option>
               </select>
             </Row>
+            <Row label="HUD テーマ" hint="1色から配色を自動生成">
+              <div className="flex flex-wrap items-center gap-1">
+                {HUD_THEMES.map((theme) => (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    title={theme.label}
+                    onClick={() =>
+                      patch({
+                        ui: {
+                          ...draft.ui,
+                          hudTheme: theme.id,
+                          hudAccent: theme.accent,
+                        },
+                      })
+                    }
+                    className={`h-5 w-5 rounded-full border transition ${
+                      draft.ui.hudTheme === theme.id
+                        ? "scale-110 border-[var(--text-primary)]"
+                        : "border-[var(--border-strong)]"
+                    }`}
+                    style={{ background: theme.accent }}
+                  />
+                ))}
+                <input
+                  type="color"
+                  title="カスタムカラー"
+                  value={
+                    isHexColor(draft.ui.hudAccent)
+                      ? draft.ui.hudAccent
+                      : DEFAULT_ACCENT
+                  }
+                  onChange={(event) =>
+                    patch({
+                      ui: {
+                        ...draft.ui,
+                        hudTheme: "custom",
+                        hudAccent: event.target.value,
+                      },
+                    })
+                  }
+                  className="h-6 w-8 cursor-pointer rounded border border-[var(--border-strong)] bg-transparent"
+                />
+              </div>
+            </Row>
             <Row
               label="クリップボードを監視"
               hint="長いコピーを検知して要約を提案"
@@ -1851,7 +1901,16 @@ export default function SettingsDialog({
                 }}
               />
             </Row>
-            <div className="flex justify-end pb-2">
+            <div className="flex justify-end gap-2 pb-2">
+              <button
+                type="button"
+                onClick={() =>
+                  patch({ hud: { ...draft.hud, width: 760, height: 480 } })
+                }
+                className="rounded-md border border-[var(--border-strong)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
+              >
+                ダッシュボード向け (760×480)
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1964,6 +2023,90 @@ export default function SettingsDialog({
                 }
               />
             </Row>
+            <Row label="静止モード" hint="リングとブラーを止めてCPUを節約">
+              <Switch
+                checked={draft.hud.staticMode}
+                onChange={(staticMode) =>
+                  patch({ hud: { ...draft.hud, staticMode } })
+                }
+              />
+            </Row>
+            <Row label="ダッシュボード: 時計">
+              <Switch
+                checked={draft.hud.showClock}
+                onChange={(showClock) =>
+                  patch({ hud: { ...draft.hud, showClock } })
+                }
+              />
+            </Row>
+            <Row label="ダッシュボード: システム">
+              <Switch
+                checked={draft.hud.showSystem}
+                onChange={(showSystem) =>
+                  patch({ hud: { ...draft.hud, showSystem } })
+                }
+              />
+            </Row>
+            <Row label="ダッシュボード: 天気">
+              <Switch
+                checked={draft.hud.showWeather}
+                onChange={(showWeather) =>
+                  patch({ hud: { ...draft.hud, showWeather } })
+                }
+              />
+            </Row>
+            <Row label="ダッシュボード: 使用量">
+              <Switch
+                checked={draft.hud.showUsage}
+                onChange={(showUsage) =>
+                  patch({ hud: { ...draft.hud, showUsage } })
+                }
+              />
+            </Row>
+            <Row label="天気の地点" hint="名称 / 緯度 / 経度">
+              <div className="flex items-center gap-1">
+                <input
+                  value={draft.hud.weatherCity}
+                  onChange={(event) =>
+                    patch({
+                      hud: { ...draft.hud, weatherCity: event.target.value },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[84px]`}
+                />
+                <input
+                  type="number"
+                  step="0.0001"
+                  value={draft.hud.weatherLat}
+                  onChange={(event) =>
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        weatherLat: Number(event.target.value),
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[76px]`}
+                />
+                <input
+                  type="number"
+                  step="0.0001"
+                  value={draft.hud.weatherLon}
+                  onChange={(event) =>
+                    patch({
+                      hud: {
+                        ...draft.hud,
+                        weatherLon: Number(event.target.value),
+                      },
+                    })
+                  }
+                  className={`${INPUT_CLASS} w-[76px]`}
+                />
+              </div>
+            </Row>
+            <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+              ダッシュボードは HUD の幅を 600px 以上にすると表示されます。
+            </p>
             <Row label="起動時に最小化（トレイ常駐）">
               <Switch
                 checked={draft.startMinimized}

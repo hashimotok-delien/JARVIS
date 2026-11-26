@@ -28,6 +28,13 @@ fn clean_path(value: &str) -> String {
         .to_string()
 }
 
+/// True for `#rrggbb` strings.
+fn is_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -262,6 +269,16 @@ pub struct HudSettings {
     pub height: u32,
     pub position_x: i32,
     pub position_y: i32,
+    /// Freeze ring rotation and drop the blur to save CPU.
+    pub static_mode: bool,
+    pub show_clock: bool,
+    pub show_system: bool,
+    pub show_weather: bool,
+    pub show_usage: bool,
+    /// Label shown on the weather panel.
+    pub weather_city: String,
+    pub weather_lat: f64,
+    pub weather_lon: f64,
 }
 
 impl Default for HudSettings {
@@ -274,6 +291,14 @@ impl Default for HudSettings {
             height: 208,
             position_x: 40,
             position_y: 40,
+            static_mode: false,
+            show_clock: true,
+            show_system: true,
+            show_weather: true,
+            show_usage: true,
+            weather_city: "TOKYO".into(),
+            weather_lat: 35.6812,
+            weather_lon: 139.7671,
         }
     }
 }
@@ -361,6 +386,10 @@ pub struct UiSettings {
     /// "custom" | "top-left" | "top-right" | "bottom-left" | "bottom-right".
     pub hud_preset: String,
     pub clipboard_watch: bool,
+    /// "arc" | "ember" | "matrix" | "crimson" | "mono" | "custom".
+    pub hud_theme: String,
+    /// Accent colour (#rrggbb) used when `hud_theme` is "custom".
+    pub hud_accent: String,
 }
 
 impl Default for UiSettings {
@@ -370,6 +399,8 @@ impl Default for UiSettings {
             font_scale: 1.0,
             hud_preset: "custom".into(),
             clipboard_watch: false,
+            hud_theme: "arc".into(),
+            hud_accent: "#00e5ff".into(),
         }
     }
 }
@@ -549,6 +580,39 @@ impl Settings {
         ) {
             self.ui.hud_preset = "custom".into();
         }
+        if !matches!(
+            self.ui.hud_theme.as_str(),
+            "arc" | "ember" | "matrix" | "crimson" | "mono" | "custom"
+        ) {
+            self.ui.hud_theme = "arc".into();
+        }
+        self.ui.hud_accent = self
+            .ui
+            .hud_accent
+            .trim()
+            .to_ascii_lowercase()
+            .chars()
+            .take(7)
+            .collect();
+        if !is_hex_color(&self.ui.hud_accent) {
+            self.ui.hud_accent = "#00e5ff".into();
+        }
+        self.hud.width = self.hud.width.clamp(320, 1920);
+        self.hud.height = self.hud.height.clamp(160, 1080);
+        self.hud.weather_city = self
+            .hud
+            .weather_city
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(24)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        if self.hud.weather_city.is_empty() {
+            self.hud.weather_city = HudSettings::default().weather_city;
+        }
+        self.hud.weather_lat = self.hud.weather_lat.clamp(-90.0, 90.0);
+        self.hud.weather_lon = self.hud.weather_lon.clamp(-180.0, 180.0);
         self.memory.max_items = self.memory.max_items.clamp(0, 40);
         self.tools.mcp_servers = std::mem::take(&mut self.tools.mcp_servers)
             .into_iter()

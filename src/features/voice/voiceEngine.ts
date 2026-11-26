@@ -77,6 +77,8 @@ class VoiceEngine {
   private bargeHits = 0;
   private wakeWatchTimer: number | null = null;
   private wakeWatchRunning = false;
+  /** Ignore further wake words for a moment after one fired. */
+  private wakeCooldownUntil = 0;
 
   lastError: string | null = null;
   lastTranscript = "";
@@ -350,6 +352,12 @@ class VoiceEngine {
           return;
         }
         if (wakeRemainder !== null) {
+          if (performance.now() < this.wakeCooldownUntil) {
+            this.setStatus("idle");
+            this.scheduleHandsFree();
+            return;
+          }
+          this.wakeCooldownUntil = performance.now() + 6000;
           this.activateHud();
           this.handsFreeActiveUntil =
             performance.now() + settings.stt.followUpMs;
@@ -532,17 +540,24 @@ class VoiceEngine {
         await new Promise((resolve) => window.setTimeout(resolve, 1800));
         const recorded = await this.recorder.stop();
         if (recorded && recorded.durationMs >= 700) {
-          const text = await transcribe(recorded.base64);
-          if (
-            text &&
-            containsWakeWord(text, current.stt.wakeSamples)
-          ) {
-            this.activateHud();
-            this.handsFreeActiveUntil =
-              performance.now() + current.stt.followUpMs;
-            this.stopWakeWatch();
-            await this.startListening();
-            return;
+          const text = (await transcribe(recorded.base64)).trim();
+          if (text) {
+            const matched = containsWakeWord(
+              text,
+              current.stt.wakeSamples,
+            );
+            // Cooldown stops echo/double triggers from re-opening the HUD.
+            if (matched && performance.now() >= this.wakeCooldownUntil) {
+              this.wakeCooldownUntil = performance.now() + 6000;
+              this.activateHud();
+              this.handsFreeActiveUntil =
+                performance.now() + current.stt.followUpMs;
+              this.stopWakeWatch();
+              await this.startListening();
+              return;
+            }
+            // Show what was heard so a missed wake word can be diagnosed.
+            void publishVoiceTranscript(text, false);
           }
         }
       } catch (error) {

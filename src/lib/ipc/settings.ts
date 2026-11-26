@@ -63,6 +63,14 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     height: 208,
     positionX: 40,
     positionY: 40,
+    staticMode: false,
+    showClock: true,
+    showSystem: true,
+    showWeather: true,
+    showUsage: true,
+    weatherCity: "TOKYO",
+    weatherLat: 35.6812,
+    weatherLon: 139.7671,
   },
   startMinimized: false,
   tools: {
@@ -88,6 +96,8 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     fontScale: 1,
     hudPreset: "custom",
     clipboardWatch: false,
+    hudTheme: "arc",
+    hudAccent: "#00e5ff",
   },
   services: [],
   updates: {

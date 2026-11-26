@@ -13,6 +13,7 @@ pub mod memory;
 pub mod services;
 pub mod settings;
 pub mod speech;
+pub mod system;
 pub mod threads;
 pub mod tools;
 pub mod update;

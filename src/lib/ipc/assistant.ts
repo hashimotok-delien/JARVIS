@@ -4,6 +4,7 @@ import type {
   HudGeometry,
   Memory,
   SearchHit,
+  SystemStats,
   Template,
   Thread,
   UsageStats,
@@ -38,6 +39,15 @@ export async function usageStats(): Promise<UsageStats | null> {
   if (!isTauri) return null;
   try {
     return await invoke<UsageStats>("usage_stats");
+  } catch {
+    return null;
+  }
+}
+
+export async function systemStats(): Promise<SystemStats | null> {
+  if (!isTauri) return null;
+  try {
+    return await invoke<SystemStats>("system_stats");
   } catch {
     return null;
   }

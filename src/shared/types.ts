@@ -179,6 +179,10 @@ export interface UiSettings {
   fontScale: number;
   hudPreset: string;
   clipboardWatch: boolean;
+  /** "arc" | "ember" | "matrix" | "crimson" | "mono" | "custom". */
+  hudTheme: string;
+  /** Accent colour (#rrggbb) used when `hudTheme` is "custom". */
+  hudAccent: string;
 }
 
 export interface UpdateSettings {
@@ -214,6 +218,39 @@ export interface HudSettings {
   height: number;
   positionX: number;
   positionY: number;
+  /** Freeze ring rotation and drop the blur to save CPU. */
+  staticMode: boolean;
+  showClock: boolean;
+  showSystem: boolean;
+  showWeather: boolean;
+  showUsage: boolean;
+  weatherCity: string;
+  weatherLat: number;
+  weatherLon: number;
+}
+
+export interface SystemStats {
+  cpu: number;
+  memUsed: number;
+  memTotal: number;
+  diskUsed: number;
+  diskTotal: number;
+  uptimeSecs: number;
+}
+
+export interface WeatherDay {
+  date: string;
+  min: number;
+  max: number;
+  code: number;
+}
+
+export interface WeatherReport {
+  city: string;
+  temp: number;
+  code: number;
+  description: string;
+  days: WeatherDay[];
 }
 
 export interface Settings {

@@ -1,7 +1,7 @@
 {
-  "version": "0.5.1",
-  "releasedAt": "2026-11-25",
-  "notes": "音声テスト（録音保存・CER・モデル比較）、Whisper幻覚除去、起動語プロンプト廃止、48k→16k正規化、無音時間プリセットを追加",
-  "installer": "JARVIS_0.5.1_x64-setup.exe",
+  "version": "0.5.2",
+  "releasedAt": "2026-11-27",
+  "notes": "HUDテーマ（1色から自動配色）、HUDダッシュボード（時計・システム・天気・使用量）、静止モード、パネル個別ON/OFF、起動語の6秒クールダウンと聞き取り表示を追加",
+  "installer": "JARVIS_0.5.2_x64-setup.exe",
   "url": ""
 }
