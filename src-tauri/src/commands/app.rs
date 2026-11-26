@@ -1,4 +1,6 @@
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, State};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, State,
+};
 
 use crate::db;
 use crate::events::{self, QuickPrompt, VoiceState};
@@ -57,7 +59,8 @@ pub fn hud_geometry(app: &AppHandle) -> Option<(i32, i32, u32, u32)> {
     let hud = app.get_webview_window("hud")?;
     let scale = hud.scale_factor().ok()?;
     let position = hud.outer_position().ok()?.to_logical::<f64>(scale);
-    let size = hud.outer_size().ok()?.to_logical::<f64>(scale);
+    // Inner size matches what `set_size` applies, so pinning does not drift.
+    let size = hud.inner_size().ok()?.to_logical::<f64>(scale);
     Some((
         position.x.round() as i32,
         position.y.round() as i32,
@@ -199,6 +202,8 @@ pub fn toggle_hud_window(app: &AppHandle) -> bool {
     }
 
     if visible {
+        // Persist where it is before hiding so a restart restores it.
+        flush_hud_geometry(app);
         if let Err(error) = hud.hide() {
             crate::log_message("ERROR", "window", &format!("hide HUD: {error}"));
             return false;
@@ -287,60 +292,129 @@ pub fn toggle_mute_impl(app: &AppHandle) -> Result<bool, String> {
     Ok(settings.tts.enabled)
 }
 
-/// Keep the HUD on a real monitor. A saved position can fall into the gap
-/// between displays (or a monitor that was unplugged), which makes the window
-/// invisible even though it is "shown". When that happens, fall back to the
-/// primary monitor's top-left corner.
-fn clamp_hud_position(
+/// Resolve the saved (logical) HUD position into physical pixels.
+///
+/// Tauri converts logical coordinates with the *current* monitor's scale, so
+/// restoring a position that was saved on a monitor with a different DPI used
+/// to land on the wrong screen (and could fall back to the default corner).
+/// Trying every monitor's scale finds the display the value was captured on.
+fn resolve_hud_position(
     hud: &tauri::WebviewWindow,
     desired: LogicalPosition<f64>,
     size: LogicalSize<f64>,
-) -> LogicalPosition<f64> {
-    let Ok(monitors) = hud.available_monitors() else {
-        return desired;
-    };
+) -> PhysicalPosition<i32> {
+    let monitors = hud.available_monitors().unwrap_or_default();
     if monitors.is_empty() {
-        return desired;
+        let scale = hud.scale_factor().unwrap_or(1.0);
+        return PhysicalPosition::new(
+            (desired.x * scale).round() as i32,
+            (desired.y * scale).round() as i32,
+        );
     }
 
-    let scale = hud.scale_factor().unwrap_or(1.0);
-    let left = desired.x * scale;
-    let top = desired.y * scale;
-    let right = left + size.width * scale;
-    let bottom = top + size.height * scale;
-    let margin = 48.0 * scale;
-
-    let visible = monitors.iter().any(|monitor| {
-        let position = monitor.position();
+    let mut best: Option<(f64, PhysicalPosition<i32>)> = None;
+    for monitor in &monitors {
+        let scale = monitor.scale_factor();
+        let origin = monitor.position();
         let monitor_size = monitor.size();
-        let monitor_right = position.x as f64 + monitor_size.width as f64;
-        let monitor_bottom = position.y as f64 + monitor_size.height as f64;
-        let overlap_x =
-            right.min(monitor_right) - left.max(position.x as f64);
-        let overlap_y =
-            bottom.min(monitor_bottom) - top.max(position.y as f64);
-        overlap_x >= margin && overlap_y >= margin
-    });
-    if visible {
-        return desired;
+
+        let left = desired.x * scale;
+        let top = desired.y * scale;
+        let right = left + size.width * scale;
+        let bottom = top + size.height * scale;
+        let monitor_right = origin.x as f64 + monitor_size.width as f64;
+        let monitor_bottom = origin.y as f64 + monitor_size.height as f64;
+
+        let overlap_x = right.min(monitor_right) - left.max(origin.x as f64);
+        let overlap_y = bottom.min(monitor_bottom) - top.max(origin.y as f64);
+        if overlap_x < 16.0 || overlap_y < 16.0 {
+            continue;
+        }
+
+        let score = overlap_x.min(overlap_y);
+        if best.is_none_or(|(best_score, _)| score > best_score) {
+            best = Some((
+                score,
+                PhysicalPosition::new(left.round() as i32, top.round() as i32),
+            ));
+        }
+    }
+    if let Some((_, position)) = best {
+        return position;
     }
 
-    let monitor = hud
+    // The saved display is gone: park it near the primary monitor's corner.
+    let primary = hud
         .primary_monitor()
         .ok()
         .flatten()
         .or_else(|| monitors.first().cloned());
-    match monitor {
+    match primary {
         Some(monitor) => {
-            let monitor_scale = monitor.scale_factor();
-            let position = monitor.position();
-            LogicalPosition::new(
-                position.x as f64 / monitor_scale + 50.0,
-                position.y as f64 / monitor_scale + 50.0,
+            let scale = monitor.scale_factor();
+            let origin = monitor.position();
+            PhysicalPosition::new(
+                origin.x + (50.0 * scale).round() as i32,
+                origin.y + (50.0 * scale).round() as i32,
             )
         }
-        None => desired,
+        None => {
+            let scale = hud.scale_factor().unwrap_or(1.0);
+            PhysicalPosition::new(
+                (desired.x * scale).round() as i32,
+                (desired.y * scale).round() as i32,
+            )
+        }
     }
+}
+
+/// Note that the HUD moved/resized so the background flusher persists it.
+pub fn note_hud_geometry_change(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if let Ok(mut slot) = state.hud_dirty.lock() {
+        *slot = Some(std::time::Instant::now());
+    }
+}
+
+/// Persist the current HUD geometry if it differs from the saved one.
+///
+/// The webview's `onMoved` can miss events while the OS drag loop is running,
+/// which made the position reset on the next launch. Tracking it natively
+/// keeps the saved value accurate.
+pub fn flush_hud_geometry(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Some((x, y, width, height)) = hud_geometry(app) else {
+        return;
+    };
+
+    let mut settings = crate::commands::read_settings(&state);
+    if settings.hud.position_x == x
+        && settings.hud.position_y == y
+        && settings.hud.width == width
+        && settings.hud.height == height
+    {
+        return;
+    }
+
+    settings.hud.position_x = x;
+    settings.hud.position_y = y;
+    settings.hud.width = width;
+    settings.hud.height = height;
+    {
+        let Ok(conn) = state.db.lock() else {
+            return;
+        };
+        if let Err(error) = db::save_settings(&conn, &settings) {
+            crate::log_message("ERROR", "hud", &format!("save geometry: {error}"));
+            return;
+        }
+    }
+    crate::log_message(
+        "DEBUG",
+        "hud",
+        &format!("geometry saved x={x} y={y} w={width} h={height}"),
+    );
+    events::emit(app, events::SETTINGS_CHANGED, settings);
 }
 
 pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
@@ -352,19 +426,44 @@ pub fn apply_hud_options(app: &AppHandle, settings: &Settings) {
                 &format!("apply HUD click-through: {error}"),
             );
         }
+        // Pinned HUDs keep a fixed size; unpinned ones can be dragged larger.
+        if let Err(error) = hud.set_resizable(!settings.hud.pinned) {
+            crate::log_message(
+                "ERROR",
+                "window",
+                &format!("apply HUD resizable: {error}"),
+            );
+        }
         let size = LogicalSize::new(
             settings.hud.width as f64,
             settings.hud.height as f64,
         );
-        if let Err(error) = hud.set_size(size) {
-            crate::log_message("ERROR", "window", &format!("resize HUD: {error}"));
-        }
         let desired = LogicalPosition::new(
             settings.hud.position_x as f64,
             settings.hud.position_y as f64,
         );
-        if let Err(error) = hud.set_position(clamp_hud_position(&hud, desired, size)) {
+        let target = resolve_hud_position(&hud, desired, size);
+        crate::log_message(
+            "DEBUG",
+            "hud",
+            &format!(
+                "apply geometry x={} y={} w={} h={} pinned={} -> physical {},{}",
+                settings.hud.position_x,
+                settings.hud.position_y,
+                settings.hud.width,
+                settings.hud.height,
+                settings.hud.pinned,
+                target.x,
+                target.y
+            ),
+        );
+        // Position first: moving to a monitor with a different DPI rescales
+        // the window, so the size has to be applied afterwards.
+        if let Err(error) = hud.set_position(target) {
             crate::log_message("ERROR", "window", &format!("position HUD: {error}"));
+        }
+        if let Err(error) = hud.set_size(size) {
+            crate::log_message("ERROR", "window", &format!("resize HUD: {error}"));
         }
         // Pinning keeps the HUD at the saved position and on top of
         // other windows instead of dropping it behind the desktop.
@@ -425,6 +524,7 @@ pub fn set_hud_visible(app: AppHandle, visible: bool) {
                 .and_then(|_| hud.show())
                 .and_then(|_| hud.unminimize())
         } else {
+            flush_hud_geometry(&app);
             hud.hide()
         };
         if let Err(error) = result {
@@ -481,7 +581,105 @@ pub fn apply_hud_settings(app: AppHandle, settings: Settings) -> Result<(), Stri
     Ok(())
 }
 
+/// Persist the HUD position/size after the user drags it.
+#[tauri::command]
+pub fn save_hud_geometry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let mut settings = crate::commands::read_settings(&state);
+    if settings.hud.position_x == x
+        && settings.hud.position_y == y
+        && settings.hud.width == width
+        && settings.hud.height == height
+    {
+        return Ok(());
+    }
+
+    settings.hud.position_x = x;
+    settings.hud.position_y = y;
+    settings.hud.width = width;
+    settings.hud.height = height;
+    {
+        let conn = crate::commands::lock_db(&state)?;
+        db::save_settings(&conn, &settings)?;
+    }
+    events::emit(&app, events::SETTINGS_CHANGED, settings);
+    Ok(())
+}
+
+/// Toggle hands-free from the HUD without re-applying window geometry.
+#[tauri::command]
+pub fn set_hands_free(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = crate::commands::read_settings(&state);
+    if settings.stt.hands_free == enabled {
+        return Ok(());
+    }
+    settings.stt.hands_free = enabled;
+    {
+        let conn = crate::commands::lock_db(&state)?;
+        db::save_settings(&conn, &settings)?;
+    }
+    events::emit(&app, events::SETTINGS_CHANGED, settings);
+    Ok(())
+}
+
+/// Pin or unpin the HUD from the HUD itself.
+#[tauri::command]
+pub fn set_hud_pinned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pinned: bool,
+) -> Result<(), String> {
+    let mut settings = crate::commands::read_settings(&state);
+    if settings.hud.pinned == pinned {
+        return Ok(());
+    }
+    // Pinning freezes the current spot/size.
+    if pinned {
+        if let Some((x, y, width, height)) = hud_geometry(&app) {
+            settings.hud.position_x = x;
+            settings.hud.position_y = y;
+            settings.hud.width = width;
+            settings.hud.height = height;
+        }
+    }
+    settings.hud.pinned = pinned;
+    {
+        let conn = crate::commands::lock_db(&state)?;
+        db::save_settings(&conn, &settings)?;
+    }
+    apply_hud_options(&app, &settings);
+    events::emit(&app, events::SETTINGS_CHANGED, settings);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn show_main_window(app: AppHandle) {
+    show_main(&app);
+}
+
+/// Show the main window if it is hidden or minimized, otherwise hide it.
+#[tauri::command]
+pub fn toggle_main_window(app: AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let visible = window.is_visible().unwrap_or(false);
+    let minimized = window.is_minimized().unwrap_or(false);
+    if visible && !minimized {
+        if let Err(error) = window.hide() {
+            crate::log_message("ERROR", "window", &format!("hide main: {error}"));
+        }
+        return;
+    }
     show_main(&app);
 }

@@ -68,6 +68,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
     showSystem: true,
     showWeather: true,
     showUsage: true,
+    panelOpacity: 0.9,
     weatherCity: "TOKYO",
     weatherLat: 35.6812,
     weatherLon: 139.7671,
@@ -143,6 +144,12 @@ export async function setOpencodeKey(
 export async function testProviders(): Promise<ProviderCheck[]> {
   if (!isTauri) return [];
   return invoke<ProviderCheck[]>("test_providers");
+}
+
+/** Toggle hands-free from the HUD (does not re-apply window geometry). */
+export async function setHandsFree(enabled: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_hands_free", { enabled });
 }
 
 export async function toggleMute(): Promise<boolean> {

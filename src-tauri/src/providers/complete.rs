@@ -33,22 +33,82 @@ async fn request(cfg: &ProviderConfig, system: &str, user: &str) -> Result<Strin
     let response = request
         .send()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("接続に失敗しました: {error}"))?;
     let status = response.status();
-    let payload: Value = response.json().await.map_err(|error| error.to_string())?;
+    // Read the raw body first so a malformed reply can be logged verbatim.
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("応答の受信に失敗しました: {error}"))?;
 
     if !status.is_success() {
-        let detail: String = payload.to_string().chars().take(240).collect();
-        return Err(format!("{status} {detail}"));
+        return Err(format!("{status} {}", excerpt(&body, 240)));
     }
 
-    payload
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| "empty completion".to_string())
+    if let Ok(payload) = serde_json::from_str::<Value>(&body) {
+        if let Some(error) = payload.get("error") {
+            return Err(excerpt(&error.to_string(), 240));
+        }
+        if let Some(text) = payload
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+        {
+            let text = text.trim();
+            if !text.is_empty() {
+                return Ok(text.to_string());
+            }
+        }
+        // Report why the model returned nothing (safety stop, empty delta...).
+        let reason = payload
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return Err(format!(
+            "empty completion (finish_reason={reason}) 本文: {}",
+            excerpt(&body, 160)
+        ));
+    }
+
+    // Some servers stream even though `stream: false` was requested.
+    let streamed = collect_streamed_content(&body);
+    if !streamed.trim().is_empty() {
+        return Ok(streamed.trim().to_string());
+    }
+
+    Err(format!("応答を解釈できません: {}", excerpt(&body, 240)))
+}
+
+fn excerpt(value: &str, max: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(max).collect();
+    format!("{head}…")
+}
+
+/// Stitch `data:` chunks together when a server ignores `stream: false`.
+fn collect_streamed_content(body: &str) -> String {
+    let mut text = String::new();
+    for line in body.lines() {
+        let Some(data) = line.trim().strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(payload) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if let Some(chunk) = payload
+            .pointer("/choices/0/delta/content")
+            .and_then(Value::as_str)
+        {
+            text.push_str(chunk);
+        }
+    }
+    text
 }
 
 /// Ask the active provider (with fallback) for a single completion.

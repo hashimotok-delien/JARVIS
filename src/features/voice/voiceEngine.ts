@@ -5,6 +5,8 @@ import { MicRecorder } from "./recorder";
 import { TtsPlayer } from "./tts";
 import { reportVoiceState, transcribe } from "../../lib/ipc/voice";
 import { containsWakeWord, removeWakeWord } from "./wakeWord";
+import { correctTranscript } from "./corrections";
+import { resolveToolApproval } from "../../lib/ipc/assistant";
 import { setHudPriority } from "../../lib/ipc/app";
 import {
   VOICE_TOGGLE,
@@ -17,6 +19,52 @@ import type { HudState } from "../../shared/types";
 
 const TERMINATORS = new Set(["。", "！", "？", "!", "?", "\n"]);
 const CLOSERS = new Set(["」", "』", "）", ")", '"', "”"]);
+
+const APPROVE_WORDS = [
+  "はい",
+  "うん",
+  "ええ",
+  "いいよ",
+  "いいです",
+  "おっけー",
+  "おーけー",
+  "オーケー",
+  "許可",
+  "どうぞ",
+  "やって",
+  "実行",
+  "お願い",
+  "よし",
+  "ok",
+  "okay",
+  "yes",
+];
+const DENY_WORDS = [
+  "いいえ",
+  "いや",
+  "だめ",
+  "ダメ",
+  "やめて",
+  "中止",
+  "キャンセル",
+  "しない",
+  "無理",
+  "ノー",
+  "no",
+  "ng",
+];
+
+/** true=許可 / false=拒否 / null=判断できない */
+function interpretApproval(text: string): boolean | null {
+  const value = text.normalize("NFKC").toLowerCase();
+  const deny = DENY_WORDS.some((word) => value.includes(word.toLowerCase()));
+  const approve = APPROVE_WORDS.some((word) =>
+    value.includes(word.toLowerCase()),
+  );
+  if (deny && !approve) return false;
+  if (approve && !deny) return true;
+  return null;
+}
 
 function cleanForSpeech(text: string): string {
   return text
@@ -79,6 +127,16 @@ class VoiceEngine {
   private wakeWatchRunning = false;
   /** Ignore further wake words for a moment after one fired. */
   private wakeCooldownUntil = 0;
+  /** Shared context for the short "heard you" blip. */
+  private cue: AudioContext | null = null;
+  /** Consecutive frames above the threshold; filters clicks/keyboard noise. */
+  private hotFrames = 0;
+  /** Milliseconds of confirmed speech in the current recording. */
+  private speechMs = 0;
+  /** Beep once when the next recording starts (after the spoken prompt). */
+  private cueOnNextListen = false;
+  /** Pending tool approval, answered by voice while set. */
+  private approvalId: string | null = null;
 
   lastError: string | null = null;
   lastTranscript = "";
@@ -91,6 +149,20 @@ class VoiceEngine {
   };
 
   getStatus = (): HudState => this.status;
+
+  /**
+   * Register a pending tool approval so the next utterance answers it by
+   * voice instead of being sent to the model. Pass null once resolved.
+   */
+  setApproval(id: string | null) {
+    if (this.approvalId === id) return;
+    this.approvalId = id;
+    if (!id) return;
+    this.playCue();
+    if (settingsStore.get()?.stt.handsFree && this.status === "idle") {
+      this.scheduleHandsFree(80);
+    }
+  }
 
   pauseForEnrollment(): boolean {
     if (this.inflight || this.status === "thinking" || this.status === "speaking") {
@@ -196,7 +268,7 @@ class VoiceEngine {
       return;
     }
 
-    await this.startListening();
+    await this.startListening(true);
   }
 
   private setStatus(next: HudState, detail?: string | null) {
@@ -217,6 +289,33 @@ class VoiceEngine {
     this.hudForeground = true;
     this.clearHudBack();
     void setHudPriority(true);
+  }
+
+  /**
+   * Short confirmation blip. A spoken prompt would block the microphone for
+   * seconds and swallow the command that usually follows the wake word.
+   */
+  private playCue() {
+    try {
+      this.cue ??= new AudioContext();
+      const context = this.cue;
+      if (context.state === "suspended") void context.resume();
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, now);
+      oscillator.frequency.exponentialRampToValueAtTime(1320, now + 0.08);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.18);
+    } catch {
+      // Audio cues are best-effort only.
+    }
   }
 
   private scheduleHudBackground() {
@@ -240,7 +339,7 @@ class VoiceEngine {
     }
   }
 
-  private async startListening() {
+  private async startListening(cue = false) {
     if (this.status !== "idle" || this.enrollmentPaused) return;
     this.stopWakeWatch();
     this.stopBargeMonitor();
@@ -265,7 +364,13 @@ class VoiceEngine {
     this.clearResume();
     this.speechDetected = false;
     this.silenceStartedAt = null;
+    this.hotFrames = 0;
+    this.speechMs = 0;
     this.listenStartedAt = performance.now();
+    if (cue || this.cueOnNextListen) {
+      this.cueOnNextListen = false;
+      this.playCue();
+    }
     this.setStatus("listening");
     this.loopTimer = window.setInterval(() => this.tick(), 60);
   }
@@ -285,24 +390,35 @@ class VoiceEngine {
 
     const level = this.recorder.level();
     void publishVoiceSpectrum(this.recorder.spectrum());
+
     if (level >= settings.stt.threshold) {
+      this.hotFrames = Math.min(6, this.hotFrames + 1);
+      this.speechMs += 60;
+      this.silenceStartedAt = null;
+    } else {
+      // Decay rather than reset: quiet speech flickers frame to frame.
+      this.hotFrames = Math.max(0, this.hotFrames - 1);
+      if (this.speechDetected) {
+        if (this.silenceStartedAt === null) {
+          this.silenceStartedAt = performance.now();
+        } else if (
+          performance.now() - this.silenceStartedAt >=
+          settings.stt.silenceMs
+        ) {
+          void this.finishListening(false);
+          return;
+        }
+      }
+    }
+
+    // Clicks and key presses never hold this long; real speech does.
+    if (this.hotFrames >= 4) {
+      this.speechDetected = true;
       if (performance.now() < this.handsFreeActiveUntil) {
         if (!this.hudForeground) this.activateHud();
         this.handsFreeActiveUntil =
           performance.now() + settings.stt.followUpMs;
         this.clearHudBack();
-      }
-      this.speechDetected = true;
-      this.silenceStartedAt = null;
-    } else if (this.speechDetected) {
-      if (this.silenceStartedAt === null) {
-        this.silenceStartedAt = performance.now();
-      } else if (
-        performance.now() - this.silenceStartedAt >=
-        settings.stt.silenceMs
-      ) {
-        void this.finishListening(false);
-        return;
       }
     }
 
@@ -321,7 +437,7 @@ class VoiceEngine {
     const tooShort =
       !recorded ||
       recorded.durationMs < 400 ||
-      (!this.speechDetected && !userStop);
+      (!userStop && (!this.speechDetected || this.speechMs < 250));
 
     if (tooShort) {
       this.inflight = false;
@@ -338,6 +454,28 @@ class VoiceEngine {
         this.scheduleHandsFree();
         return;
       }
+
+      // A pending tool approval is answered by voice, not sent to the model.
+      if (this.approvalId) {
+        const approvalId = this.approvalId;
+        const answer = interpretApproval(text);
+        this.lastTranscript = text;
+        void publishVoiceTranscript(text, true);
+        if (answer === null) {
+          this.tts.enqueue(
+            "許可しますか？「はい」か「いいえ」で答えてください。",
+          );
+          this.setStatus("idle");
+          this.scheduleHandsFree();
+          return;
+        }
+        this.approvalId = null;
+        void resolveToolApproval(approvalId, answer);
+        this.setStatus("idle");
+        this.scheduleHandsFree();
+        return;
+      }
+
       const settings = settingsStore.get();
       let message = text;
       if (settings?.stt.handsFree) {
@@ -367,6 +505,8 @@ class VoiceEngine {
             void publishVoiceTranscript("", true);
             // Only this prompt allows the next answer without the wake word.
             this.allowFollowUp = true;
+            // Beep as soon as the microphone reopens after the prompt.
+            this.cueOnNextListen = true;
             this.tts.enqueue(
               `${settings.preferredName}様、ご要件はなんでしょうか？`,
             );
@@ -385,14 +525,25 @@ class VoiceEngine {
         }
       }
 
-      this.lastTranscript = message;
-      void publishVoiceTranscript(message, true);
+      const finalText = correctTranscript(message);
+      this.lastTranscript = finalText;
+      void publishVoiceTranscript(finalText, true);
       // After a real answer the next turn must start with the wake word.
       this.allowFollowUp = false;
-      await chatStore.send(message, null, "voice");
+      await chatStore.send(finalText, null, "voice");
     } catch (error) {
-      this.lastError =
+      const message =
         error instanceof Error ? error.message : String(error);
+      // Silence/noise is normal; never surface it as an error.
+      if (
+        message.includes("音声を認識できませんでした") ||
+        message.includes("音声入力は無効")
+      ) {
+        this.setStatus("idle");
+        this.scheduleHandsFree();
+        return;
+      }
+      this.lastError = message;
       void logError("voice_transcribe_or_send", error);
       this.setStatus("idle", this.lastError);
       this.listeners.forEach((listener) => listener());
@@ -549,6 +700,7 @@ class VoiceEngine {
             // Cooldown stops echo/double triggers from re-opening the HUD.
             if (matched && performance.now() >= this.wakeCooldownUntil) {
               this.wakeCooldownUntil = performance.now() + 6000;
+              this.playCue();
               this.activateHud();
               this.handsFreeActiveUntil =
                 performance.now() + current.stt.followUpMs;
@@ -578,7 +730,7 @@ class VoiceEngine {
     }
   }
 
-  private scheduleHandsFree() {
+  private scheduleHandsFree(delay = 500) {
     const settings = settingsStore.get();
     if (!settings?.stt.handsFree) return;
     if (this.enrollmentPaused) return;
@@ -599,7 +751,7 @@ class VoiceEngine {
       ) {
         void this.startListening();
       }
-    }, 500);
+    }, delay);
   }
 
   private clearResume() {

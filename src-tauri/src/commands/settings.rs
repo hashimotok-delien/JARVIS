@@ -18,10 +18,24 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<SettingsPayload, String> {
+    let stored = crate::commands::read_settings(&state);
     let mut settings = settings.sanitized();
     // "Fix HUD here": remember where the HUD currently sits when pinning.
     if settings.hud.pinned {
         if let Some((x, y, width, height)) = crate::commands::app::hud_geometry(&app) {
+            settings.hud.position_x = x;
+            settings.hud.position_y = y;
+            settings.hud.width = width;
+            settings.hud.height = height;
+        }
+    } else if let Some((x, y, width, height)) = crate::commands::app::hud_geometry(&app) {
+        // The dialog can be open while the HUD is dragged. Keep the live spot
+        // unless the draft explicitly changed the geometry.
+        let untouched = settings.hud.position_x == stored.hud.position_x
+            && settings.hud.position_y == stored.hud.position_y
+            && settings.hud.width == stored.hud.width
+            && settings.hud.height == stored.hud.height;
+        if untouched {
             settings.hud.position_x = x;
             settings.hud.position_y = y;
             settings.hud.width = width;

@@ -270,10 +270,12 @@ pub async fn execute(
             if target.is_empty() {
                 return Err("target が空です".into());
             }
-            if !confirm(app, settings, "launch_app", target).await {
+            let resolved = resolve_app_alias(target);
+            let launch = resolved.as_deref().unwrap_or(target);
+            if !confirm(app, settings, "launch_app", launch).await {
                 return Err("ユーザーが実行を拒否しました".into());
             }
-            open_target(target)?;
+            open_target(launch)?;
             Ok(format!("{target} を起動しました"))
         }
         "read_file" => {
@@ -470,10 +472,65 @@ fn open_target(target: &str) -> Result<(), String> {
     command.args(["/C", "start", "", target]);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("起動できません: {error}"))
+    let status = command
+        .status()
+        .map_err(|error| format!("起動できません: {error}"))?;
+    if !status.success() {
+        return Err(format!("「{target}」を起動できませんでした"));
+    }
+    Ok(())
+}
+
+/// Map common app names (including whisper misrecognitions) to something
+/// `start` can launch. Only bare names are resolved, never paths or URLs.
+fn resolve_app_alias(target: &str) -> Option<String> {
+    let trimmed = target.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('\\')
+        || trimmed.contains('/')
+        || trimmed.contains(':')
+    {
+        return None;
+    }
+
+    let lowered = trimmed.to_lowercase();
+    let name = lowered
+        .trim_end_matches(".exe")
+        .trim_end_matches("を開いて")
+        .trim_end_matches("を起動")
+        .trim();
+
+    const ALIASES: &[(&[&str], &str)] = &[
+        (
+            &[
+                "電卓",
+                "でんたく",
+                "でんたこ",
+                "全卓",
+                "電宅",
+                "電タフ",
+                "ペンタコ",
+                "計算機",
+                "けいさんき",
+                "伝託",
+                "伝達",
+            ],
+            "calc",
+        ),
+        (&["メモ帳", "めもちょう", "notepad"], "notepad"),
+        (&["ペイント", "paint", "mspaint"], "mspaint"),
+        (&["エクスプローラー", "explorer"], "explorer"),
+        (&["タスクマネージャー", "taskmgr"], "taskmgr"),
+        (&["コマンドプロンプト", "cmd"], "cmd"),
+        (&["設定", "せってい"], "ms-settings:"),
+    ];
+
+    ALIASES.iter().find_map(|(names, command)| {
+        names
+            .iter()
+            .any(|alias| name == *alias)
+            .then(|| (*command).to_string())
+    })
 }
 
 /// Capture the primary screen, downscaled to at most 1600px wide.

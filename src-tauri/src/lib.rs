@@ -331,8 +331,12 @@ pub fn run() {
             commands::app::report_voice_state,
             commands::app::toggle_mute,
             commands::app::apply_hud_settings,
+            commands::app::save_hud_geometry,
+            commands::app::set_hud_pinned,
+            commands::app::set_hands_free,
             commands::app::get_hud_geometry,
             commands::app::show_main_window,
+            commands::app::toggle_main_window,
             commands::threads::list_threads,
             commands::threads::create_thread,
             commands::threads::rename_thread,
@@ -413,6 +417,47 @@ pub fn run() {
 
             let settings = commands::read_settings_from(handle);
             commands::app::apply_hud_options(handle, &settings);
+
+            // Track the HUD geometry natively. The webview can miss move
+            // events while the OS drag loop runs, which used to reset the
+            // position on the next launch.
+            if let Some(hud) = handle.get_webview_window("hud") {
+                let event_handle = handle.clone();
+                hud.on_window_event(move |event| {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                    ) {
+                        commands::app::note_hud_geometry_change(&event_handle);
+                    }
+                });
+            }
+            let flush_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let due = {
+                        let state = flush_handle.state::<AppState>();
+                        let Ok(mut slot) = state.hud_dirty.lock() else {
+                            continue;
+                        };
+                        match *slot {
+                            Some(at)
+                                if at.elapsed()
+                                    >= std::time::Duration::from_millis(800) =>
+                            {
+                                *slot = None;
+                                true
+                            }
+                            _ => false,
+                        }
+                    };
+                    if due {
+                        commands::app::flush_hud_geometry(&flush_handle);
+                    }
+                }
+            });
+
             crate::speech::stt::warm_up(handle);
             services::start_auto(handle);
 
@@ -448,6 +493,8 @@ pub fn run() {
     match result {
         Ok(app) => app.run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // Persist the final HUD spot before the process goes away.
+                commands::app::flush_hud_geometry(app_handle);
                 services::stop_all(app_handle);
             }
         }),

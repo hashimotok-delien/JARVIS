@@ -472,18 +472,14 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
                     "stt",
                     &format!("suspect transcript rejected (engine={used})"),
                 );
-                Err(
-                    "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
-                        .to_string(),
-                )
+                // Not an error: this is silence/noise. An empty string lets
+                // the caller return to idle without surfacing a failure.
+                Ok(String::new())
             } else {
                 Ok(text)
             }
         }
-        Ok(_) => Err(
-            "音声を認識できませんでした。設定 → 音声入力 でマイクと認識エンジンを確認してください。"
-                .to_string(),
-        ),
+        Ok(_) => Ok(String::new()),
         Err(error) => Err(error),
     }
 }

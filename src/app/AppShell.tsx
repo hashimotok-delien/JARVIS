@@ -127,6 +127,11 @@ export default function AppShell() {
     });
   }, [settings?.previousVersion, appInfo?.version, seenPreviousVersion]);
 
+  // Let the voice engine answer a pending tool approval with yes/no.
+  useEffect(() => {
+    voiceEngine.setApproval(approval?.id ?? null);
+  }, [approval]);
+
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 8000);
@@ -661,6 +666,7 @@ export default function AppShell() {
       <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
       <ApprovalDialog
         request={approval}
+        voiceEnabled={settings?.stt.handsFree ?? false}
         onDecide={(id, approved) => {
           setApproval(null);
           void resolveToolApproval(id, approved);

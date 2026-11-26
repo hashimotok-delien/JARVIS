@@ -275,6 +275,8 @@ pub struct HudSettings {
     pub show_system: bool,
     pub show_weather: bool,
     pub show_usage: bool,
+    /// Background alpha of the dashboard panels (0.0..1.0).
+    pub panel_opacity: f32,
     /// Label shown on the weather panel.
     pub weather_city: String,
     pub weather_lat: f64,
@@ -296,6 +298,7 @@ impl Default for HudSettings {
             show_system: true,
             show_weather: true,
             show_usage: true,
+            panel_opacity: 0.9,
             weather_city: "TOKYO".into(),
             weather_lat: 35.6812,
             weather_lon: 139.7671,
@@ -599,6 +602,8 @@ impl Settings {
         }
         self.hud.width = self.hud.width.clamp(320, 1920);
         self.hud.height = self.hud.height.clamp(160, 1080);
+        self.hud.opacity = self.hud.opacity.clamp(0.3, 1.0);
+        self.hud.panel_opacity = self.hud.panel_opacity.clamp(0.0, 1.0);
         self.hud.weather_city = self
             .hud
             .weather_city

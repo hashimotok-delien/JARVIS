@@ -7,8 +7,12 @@ import type {
 } from "../../shared/types";
 
 const PANEL_CLASS =
-  "rounded-lg border border-[var(--border-subtle)] " +
-  "bg-[var(--bg-elevated)] px-2 py-1.5";
+  "rounded-lg border border-[var(--border-subtle)] px-2 py-1.5";
+
+const PANEL_STYLE = {
+  backgroundColor:
+    "color-mix(in srgb, var(--bg-elevated) var(--hud-panel-alpha, 90%), transparent)",
+} as const;
 
 const LABEL_CLASS = "text-[9px] tracking-[0.18em] text-[var(--text-muted)]";
 
@@ -75,7 +79,7 @@ function ClockPanel() {
   });
 
   return (
-    <div className={PANEL_CLASS}>
+    <div className={PANEL_CLASS} style={PANEL_STYLE}>
       <p className="font-mono text-lg leading-none text-[var(--accent)]">
         {time}
       </p>
@@ -91,7 +95,7 @@ function SystemPanel({ stats }: { stats: SystemStats | null }) {
     stats && stats.diskTotal ? (stats.diskUsed / stats.diskTotal) * 100 : 0;
 
   return (
-    <div className={PANEL_CLASS}>
+    <div className={PANEL_CLASS} style={PANEL_STYLE}>
       <p className={LABEL_CLASS}>SYSTEM</p>
       <div className="mt-1 space-y-1">
         <Gauge
@@ -127,7 +131,7 @@ function SystemPanel({ stats }: { stats: SystemStats | null }) {
 
 function WeatherPanel({ report }: { report: WeatherReport | null }) {
   return (
-    <div className={PANEL_CLASS}>
+    <div className={PANEL_CLASS} style={PANEL_STYLE}>
       <div className="flex items-baseline justify-between">
         <span className={LABEL_CLASS}>{report?.city ?? "WEATHER"}</span>
         <span className="text-sm text-[var(--accent)]">
@@ -161,7 +165,7 @@ function UsagePanel({ usage }: { usage: UsageStats | null }) {
   const tokens = today ? Math.round(today.characters / 1.6) : 0;
 
   return (
-    <div className={PANEL_CLASS}>
+    <div className={PANEL_CLASS} style={PANEL_STYLE}>
       <p className={LABEL_CLASS}>USAGE / 24H</p>
       <p className="text-[11px] text-[var(--text-secondary)]">
         {today

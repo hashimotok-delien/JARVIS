@@ -4,6 +4,8 @@ import type { ToolApprovalEvent } from "../../shared/types";
 interface ApprovalDialogProps {
   request: ToolApprovalEvent | null;
   onDecide: (id: string, approved: boolean) => void;
+  /** Hands-free is on, so "はい / いいえ" answers it by voice. */
+  voiceEnabled?: boolean;
 }
 
 const LABELS: Record<string, string> = {
@@ -15,6 +17,7 @@ const LABELS: Record<string, string> = {
 export default function ApprovalDialog({
   request,
   onDecide,
+  voiceEnabled = false,
 }: ApprovalDialogProps) {
   if (!request) return null;
 
@@ -47,6 +50,11 @@ export default function ApprovalDialog({
               {request.summary}
             </p>
           </div>
+          {voiceEnabled && (
+            <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
+              ハンズフリー中です。「はい」か「いいえ」と話しても回答できます。
+            </p>
+          )}
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">

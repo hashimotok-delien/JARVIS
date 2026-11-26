@@ -224,6 +224,8 @@ export interface HudSettings {
   showSystem: boolean;
   showWeather: boolean;
   showUsage: boolean;
+  /** Background alpha of the dashboard panels (0..1). */
+  panelOpacity: number;
   weatherCity: string;
   weatherLat: number;
   weatherLon: number;

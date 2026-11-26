@@ -33,6 +33,8 @@ pub struct AppState {
     pub previous_version: Mutex<Option<String>>,
     /// Pending tool approvals awaiting a user decision.
     pub approvals: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// Last time the HUD moved/resized, used to debounce persistence.
+    pub hud_dirty: Mutex<Option<std::time::Instant>>,
     /// Long-lived speech.cpp worker that keeps the recognizer loaded.
     pub asr_worker: Mutex<Option<SpeechWorker>>,
     /// Services spawned by JARVIS (owned) keyed by configured name.
@@ -49,6 +51,7 @@ impl AppState {
             data_dir,
             previous_version: Mutex::new(None),
             approvals: Mutex::new(HashMap::new()),
+            hud_dirty: Mutex::new(None),
             asr_worker: Mutex::new(None),
             services: Mutex::new(HashMap::new()),
         }

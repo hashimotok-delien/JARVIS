@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import LocalServicesSettings from "./LocalServicesSettings";
+import WeatherLocationField from "./WeatherLocationField";
 import VoiceLabDialog from "../voice/VoiceLabDialog";
 import { settingsStore, useSettings } from "./settingsStore";
 import { updateStore, useUpdate } from "../update/updateStore";
@@ -2023,6 +2024,48 @@ export default function SettingsDialog({
                 }
               />
             </Row>
+            <Row
+              label="HUD の透明度"
+              hint={`${Math.round(draft.hud.opacity * 100)}%`}
+            >
+              <input
+                type="range"
+                min="0.3"
+                max="1"
+                step="0.05"
+                value={draft.hud.opacity}
+                onChange={(event) =>
+                  patch({
+                    hud: {
+                      ...draft.hud,
+                      opacity: Number(event.target.value),
+                    },
+                  })
+                }
+                className="w-[150px]"
+              />
+            </Row>
+            <Row
+              label="パネル背景の透明度"
+              hint={`${Math.round(draft.hud.panelOpacity * 100)}%`}
+            >
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={draft.hud.panelOpacity}
+                onChange={(event) =>
+                  patch({
+                    hud: {
+                      ...draft.hud,
+                      panelOpacity: Number(event.target.value),
+                    },
+                  })
+                }
+                className="w-[150px]"
+              />
+            </Row>
             <Row label="静止モード" hint="リングとブラーを止めてCPUを節約">
               <Switch
                 checked={draft.hud.staticMode}
@@ -2063,47 +2106,28 @@ export default function SettingsDialog({
                 }
               />
             </Row>
-            <Row label="天気の地点" hint="名称 / 緯度 / 経度">
-              <div className="flex items-center gap-1">
-                <input
-                  value={draft.hud.weatherCity}
-                  onChange={(event) =>
-                    patch({
-                      hud: { ...draft.hud, weatherCity: event.target.value },
-                    })
-                  }
-                  className={`${INPUT_CLASS} w-[84px]`}
-                />
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={draft.hud.weatherLat}
-                  onChange={(event) =>
-                    patch({
-                      hud: {
-                        ...draft.hud,
-                        weatherLat: Number(event.target.value),
-                      },
-                    })
-                  }
-                  className={`${INPUT_CLASS} w-[76px]`}
-                />
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={draft.hud.weatherLon}
-                  onChange={(event) =>
-                    patch({
-                      hud: {
-                        ...draft.hud,
-                        weatherLon: Number(event.target.value),
-                      },
-                    })
-                  }
-                  className={`${INPUT_CLASS} w-[76px]`}
-                />
-              </div>
-            </Row>
+            <div className="border-t border-[var(--border-subtle)] pt-2">
+              <p className="mb-1 text-[10px] tracking-[0.18em] text-[var(--text-muted)]">
+                天気の地点
+              </p>
+              <WeatherLocationField
+                value={{
+                  city: draft.hud.weatherCity,
+                  lat: draft.hud.weatherLat,
+                  lon: draft.hud.weatherLon,
+                }}
+                onChange={(next) =>
+                  patch({
+                    hud: {
+                      ...draft.hud,
+                      weatherCity: next.city,
+                      weatherLat: next.lat,
+                      weatherLon: next.lon,
+                    },
+                  })
+                }
+              />
+            </div>
             <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
               ダッシュボードは HUD の幅を 600px 以上にすると表示されます。
             </p>

@@ -1,16 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { MotionConfig, motion } from "framer-motion";
-import { Mic, Volume2, VolumeX, X } from "lucide-react";
+import { Mic, Maximize2, Pin, Volume2, VolumeX, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import HudRing from "./HudRing";
 import Dashboard from "./DashboardPanels";
 import { HUD_STATE_META } from "./states";
 import { fetchWeather } from "./weather";
-import { isTauri, requestVoiceToggle } from "../../lib/ipc/app";
+import {
+  isTauri,
+  requestVoiceToggle,
+  saveHudGeometry,
+  setHudPinned,
+  toggleMainWindow,
+} from "../../lib/ipc/app";
 import { listMessages, listThreads } from "../../lib/ipc/chat";
 import { systemStats, usageStats } from "../../lib/ipc/assistant";
 import { logError } from "../../lib/logging";
-import { toggleMute } from "../../lib/ipc/settings";
+import { setHandsFree, toggleMute } from "../../lib/ipc/settings";
 import { applyHudTheme } from "../../shared/theme/palette";
 import {
   CHAT_DELTA,
@@ -84,6 +90,7 @@ export default function HudOverlay() {
 
   const expanded = (settings?.hud.width ?? 380) >= 600;
   const staticMode = settings?.hud.staticMode ?? false;
+  const pinned = settings?.hud.pinned ?? false;
 
   useEffect(() => {
     void settingsStore.init();
@@ -169,6 +176,47 @@ export default function HudOverlay() {
     applyHudTheme(settings.ui);
   }, [settings]);
 
+  // Remember where the user drags the HUD so it survives a restart.
+  useEffect(() => {
+    if (!isTauri) return;
+    const win = getCurrentWindow();
+    let timer: number | null = null;
+
+    const persist = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        void (async () => {
+          try {
+            const [position, size, scale] = await Promise.all([
+              win.outerPosition(),
+              win.innerSize(),
+              win.scaleFactor(),
+            ]);
+            const point = position.toLogical(scale);
+            const logical = size.toLogical(scale);
+            await saveHudGeometry(
+              Math.round(point.x),
+              Math.round(point.y),
+              Math.round(logical.width),
+              Math.round(logical.height),
+            );
+          } catch (error) {
+            void logError("hud_geometry", error);
+          }
+        })();
+      }, 500);
+    };
+
+    const unlisteners = [win.onMoved(persist), win.onResized(persist)];
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      void Promise.all(unlisteners).then((fns) =>
+        fns.forEach((unlisten) => unlisten()),
+      );
+    };
+  }, []);
+
   // Usage: refresh once a minute while the dashboard is visible.
   useEffect(() => {
     if (!expanded || !settings?.hud.showUsage) return;
@@ -237,13 +285,37 @@ export default function HudOverlay() {
     }
   };
 
+  const toggleHandsFree = () => {
+    if (!settings) return;
+    void setHandsFree(!settings.stt.handsFree).catch((error) =>
+      void logError("toggle_hands_free", error),
+    );
+  };
+
+  const togglePinned = () => {
+    if (!settings) return;
+    void setHudPinned(!settings.hud.pinned).catch((error) =>
+      void logError("toggle_pinned", error),
+    );
+  };
+
   const visibleText = errorText ?? subtitle;
 
   return (
     <MotionConfig reducedMotion={staticMode ? "always" : "user"}>
-    <div className="flex h-full w-full items-center justify-center p-2">
+    <div
+      className="flex h-full w-full items-center justify-center p-2"
+      style={
+        {
+          opacity: settings?.hud.opacity ?? 1,
+          "--hud-panel-alpha": `${Math.round(
+            (settings?.hud.panelOpacity ?? 0.9) * 100,
+          )}%`,
+        } as CSSProperties
+      }
+    >
       <div
-        className={`flex h-full w-full flex-col overflow-hidden rounded-2xl border ${
+        className={`relative flex h-full w-full flex-col overflow-hidden rounded-2xl border ${
           staticMode ? "" : "backdrop-blur-xl"
         }`}
         style={{
@@ -275,14 +347,42 @@ export default function HudOverlay() {
             />
             J.A.R.V.I.S.
           </span>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="HUDを閉じる"
-            className="rounded p-1 text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-          >
-            <X size={12} />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={togglePinned}
+              aria-label={pinned ? "固定を解除" : "HUDを固定"}
+              title={
+                pinned
+                  ? "固定を解除（移動・サイズ変更できます）"
+                  : "この位置で固定（サイズ変更は不要）"
+              }
+              className={`rounded p-1 transition hover:bg-[var(--bg-hover)] ${
+                pinned
+                  ? "text-[var(--accent)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--accent)]"
+              }`}
+            >
+              <Pin size={12} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void toggleMainWindow()}
+              aria-label="メインウィンドウの表示切替"
+              title="メインウィンドウを表示 / 隠す"
+              className="rounded p-1 text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--accent)]"
+            >
+              <Maximize2 size={12} />
+            </button>
+            <button
+              type="button"
+              onClick={close}
+              aria-label="HUDを閉じる"
+              className="rounded p-1 text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+            >
+              <X size={12} />
+            </button>
+          </div>
         </header>
 
         <div className="flex min-h-0 flex-1 items-stretch gap-3 px-3 pb-2">
@@ -365,9 +465,24 @@ export default function HudOverlay() {
               </button>
 
               {settings?.stt.handsFree && (
-                <span className="rounded-full border border-[var(--accent-dim)] px-1.5 py-0.5 text-[9px] text-[var(--accent)]">
+                <button
+                  type="button"
+                  onClick={toggleHandsFree}
+                  title="ハンズフリーをOFF"
+                  className="rounded-full border border-[var(--accent-dim)] px-1.5 py-0.5 text-[9px] text-[var(--accent)] transition hover:border-[var(--error)]/60 hover:text-[var(--error)]"
+                >
                   HANDS-FREE
-                </span>
+                </button>
+              )}
+              {settings && !settings.stt.handsFree && (
+                <button
+                  type="button"
+                  onClick={toggleHandsFree}
+                  title="ハンズフリーをON"
+                  className="rounded-full border border-[var(--border-strong)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)] transition hover:text-[var(--accent)]"
+                >
+                  HANDS-FREE
+                </button>
               )}
               {muted && (
                 <span className="rounded-full border border-[var(--warn)]/50 px-1.5 py-0.5 text-[9px] text-[var(--warn)]">
@@ -386,6 +501,30 @@ export default function HudOverlay() {
             />
           )}
         </div>
+
+        {!pinned && (
+          <div
+            role="separator"
+            aria-label="サイズ変更"
+            title="ドラッグでサイズ変更"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              void getCurrentWindow()
+                .startResizeDragging("SouthEast")
+                .catch((error) => void logError("hud_resize", error));
+            }}
+            className="absolute bottom-0 right-0 flex h-5 w-5 cursor-nwse-resize items-end justify-end p-1 text-[var(--text-muted)] transition hover:text-[var(--accent)]"
+          >
+            <svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">
+              <path
+                d="M8 1L1 8M8 4.5L4.5 8"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </div>
+        )}
       </div>
     </div>
     </MotionConfig>

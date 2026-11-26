@@ -43,6 +43,27 @@ export async function setHudPriority(foreground: boolean): Promise<void> {
   }
 }
 
+/** Persist the HUD geometry after the user drags or resizes it. */
+export async function saveHudGeometry(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke("save_hud_geometry", { x, y, width, height });
+  } catch (error) {
+    void logError("save_hud_geometry", error);
+  }
+}
+
+/** Pin the HUD at its current spot (and freeze its size). */
+export async function setHudPinned(pinned: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_hud_pinned", { pinned });
+}
+
 export async function requestVoiceToggle(): Promise<void> {
   if (!isTauri) return;
   await invoke("request_voice_toggle");
@@ -51,4 +72,14 @@ export async function requestVoiceToggle(): Promise<void> {
 export async function showMainWindow(): Promise<void> {
   if (!isTauri) return;
   await invoke("show_main_window");
+}
+
+/** Show the main window if hidden/minimized, otherwise hide it. */
+export async function toggleMainWindow(): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke("toggle_main_window");
+  } catch (error) {
+    void logError("toggle_main_window", error);
+  }
 }
