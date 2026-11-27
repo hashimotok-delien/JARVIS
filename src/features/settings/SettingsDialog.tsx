@@ -761,9 +761,9 @@ export default function SettingsDialog({
 
             <div className="mt-2 space-y-1 border-t border-[var(--border-subtle)] pt-2">
               <p className="text-[10px] font-medium text-[var(--text-secondary)]">
-                OpenCode Go（`opencode web` サーバー）
+                OpenCode（`opencode web` / `opencode serve`）
               </p>
-              <Row label="Base URL" hint="/v1 まで含める">
+              <Row label="Base URL" hint="サーバーのルート（/v1 は不要）">
                 <input
                   value={draft.providers.opencodeBaseUrl}
                   onChange={(event) =>
@@ -774,11 +774,11 @@ export default function SettingsDialog({
                       },
                     })
                   }
-                  placeholder="http://192.168.0.10:3000/v1"
+                  placeholder="http://127.0.0.1:3000"
                   className={INPUT_CLASS}
                 />
               </Row>
-              <Row label="モデル（通常）">
+              <Row label="モデル（通常）" hint="provider/model 形式も可">
                 <input
                   value={draft.providers.opencodeModel}
                   onChange={(event) =>
@@ -810,7 +810,11 @@ export default function SettingsDialog({
               </Row>
               <Row
                 label="OpenCode API キー"
-                hint={settings?.hasOpencodeKey ? "保存済み（DPAPI）" : "未設定"}
+                hint={
+                  settings?.hasOpencodeKey
+                    ? "保存済み（DPAPI）"
+                    : "未設定（ローカルなら不要）"
+                }
               >
                 <input
                   type="password"

@@ -10,6 +10,24 @@ J.A.R.V.I.S. の注目に値する変更点を、リリースごとに時系列�
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode プロバイダを `opencode web` のネイティブ API
+  （`POST /api/experimental/generate/text`）に接続。Base URL はサーバーの
+  ルート（例 `http://127.0.0.1:3000`）で、旧 `/v1` 付き設定は自動で移行。
+  ローカルサーバーは API キー不要。接続テストは `GET /api/info` を使用
+- OpenCode 経由は一括応答のため、トークンストリーミングとツール呼び出しは
+  利用不可（他プロバイダでは従来どおり）
+
+### Fixed
+
+- HUD 右下ハンドルでのサイズ変更が `start_resize_dragging` の ACL 未許可で
+  失敗していた問題（`core:window:allow-start-resize-dragging` を追加）
+- 音声入力で `[音楽]` `(キャラクター)` のような非音声アノテーションや、
+  1文字だけの誤認識（「ん」）を発話として受け付けていた問題
+- OpenAI 互換サーバーが HTML を返したときに「応答を解釈できません」としか
+  表示されず、接続テストも誤って OK と表示していた問題
+
 ## [0.5.2] - 2026-11-27
 
 ### Added

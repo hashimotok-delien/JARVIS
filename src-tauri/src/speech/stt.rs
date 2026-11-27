@@ -358,6 +358,58 @@ fn is_degenerate_transcript(text: &str) -> bool {
     most * 100 / chars.len() >= 60
 }
 
+/// Punctuation that carries no meaning on its own.
+const PUNCTUATION: &str = "、。,.!?！？…・「」『』（）()[]【】";
+
+/// Whisper writes non-speech events as `[音楽]`, `(拍手)` or `（笑い）`.
+/// Those annotations must never be sent to the model as a user utterance.
+fn is_annotation_only(text: &str) -> bool {
+    let mut depth = 0usize;
+    let mut saw_annotation = false;
+    let mut outside = String::new();
+    for character in text.chars() {
+        match character {
+            '[' | '(' | '（' | '「' | '『' | '【' => {
+                depth += 1;
+                saw_annotation = true;
+            }
+            ']' | ')' | '）' | '」' | '』' | '】' => {
+                depth = depth.saturating_sub(1);
+            }
+            _ if depth > 0 => {}
+            _ => outside.push(character),
+        }
+    }
+    if !saw_annotation {
+        return false;
+    }
+    outside
+        .chars()
+        .all(|character| character.is_whitespace() || PUNCTUATION.contains(character))
+}
+
+/// True when the transcript must not be shown as a user utterance.
+fn is_unusable_transcript(
+    text: &str,
+    metrics: Option<crate::speech::dsp::AudioMetrics>,
+) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let meaningful = trimmed
+        .chars()
+        .filter(|character| {
+            !character.is_whitespace() && !PUNCTUATION.contains(*character)
+        })
+        .count();
+    // A lone syllable ("ん") is always a misrecognition of noise.
+    meaningful < 2
+        || is_annotation_only(trimmed)
+        || is_degenerate_transcript(trimmed)
+        || looks_like_hallucination(trimmed, metrics)
+}
+
 fn run_engine(
     app: &AppHandle,
     settings: &Settings,
@@ -425,9 +477,7 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
     let low_quality = match &result {
         Err(_) => true,
         Ok(text) => {
-            text.trim().is_empty()
-                || is_degenerate_transcript(text)
-                || looks_like_hallucination(text, metrics)
+            is_unusable_transcript(text, metrics)
                 || metrics
                     .map(|metrics| {
                         metrics.duration_ms >= 500 && metrics.speech_ratio < 0.06
@@ -448,7 +498,8 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
                 &format!("low quality result from {used}; retrying with {alternate}"),
             );
             if let Ok(text) = run_engine(app, settings, wav, alternate) {
-                if !text.trim().is_empty() && !is_degenerate_transcript(&text) {
+                // Reject a retry that is just as unusable as the first pass.
+                if !is_unusable_transcript(&text, metrics) {
                     used = alternate;
                     result = Ok(text);
                 }
@@ -464,9 +515,7 @@ pub fn transcribe(app: &AppHandle, settings: &Settings, wav: &[u8]) -> Result<St
                 "stt",
                 &format!("engine={used} text={preview}"),
             );
-            if is_degenerate_transcript(&text)
-                || looks_like_hallucination(&text, metrics)
-            {
+            if is_unusable_transcript(&text, metrics) {
                 crate::log_message(
                     "WARN",
                     "stt",
@@ -755,6 +804,23 @@ mod tests {
         ));
         assert!(!is_degenerate_transcript("こんにちは、ジャービスです"));
         assert!(!is_degenerate_transcript("はい"));
+    }
+
+    #[test]
+    fn annotation_only_transcripts_are_rejected() {
+        assert!(is_annotation_only("[音楽]"));
+        assert!(is_annotation_only("（拍手）"));
+        assert!(is_annotation_only("(キャラクター)"));
+        assert!(!is_annotation_only("音楽を再生して"));
+        assert!(!is_annotation_only("（あの）電卓を開いて"));
+    }
+
+    #[test]
+    fn single_syllable_is_not_an_utterance() {
+        assert!(is_unusable_transcript("ん", None));
+        assert!(is_unusable_transcript("  ", None));
+        assert!(!is_unusable_transcript("はい", None));
+        assert!(!is_unusable_transcript("電卓を開いて", None));
     }
 
     #[test]

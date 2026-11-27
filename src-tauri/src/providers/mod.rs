@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod complete;
 pub mod openai_compat;
+pub mod opencode;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -219,9 +220,9 @@ pub async fn run(app: AppHandle, ctx: StreamContext, settings: Settings, cancel:
     let mut candidates: Vec<ProviderConfig> = Vec::new();
     let mut skipped: Option<String> = None;
     for provider in providers {
-        if (provider.id == "gemini" || provider.id == "opencode")
-            && provider.api_key.is_none()
-        {
+        // A local `opencode web` server needs no key, so only Gemini is
+        // skipped when the key is missing.
+        if provider.id == "gemini" && provider.api_key.is_none() {
             skipped = Some(format!(
                 "{} の API キーが未設定のためスキップ",
                 provider.label

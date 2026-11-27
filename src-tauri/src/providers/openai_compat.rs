@@ -159,6 +159,18 @@ where
         .unwrap_or_default()
         .to_ascii_lowercase();
 
+    // `opencode web` and other SPA servers answer unknown routes with HTML.
+    // Without this check the body is parsed as SSE and yields an empty reply.
+    if content_type.starts_with("text/html") {
+        let body = response.text().await.unwrap_or_default();
+        return Err(StreamFailure::Http(format!(
+            "サーバーがHTMLを返しました（{}）。OpenAI 互換の /chat/completions \
+             ではありません。`opencode web` は /api/ 配下の独自APIのみ提供します。{}",
+            cfg.base_url,
+            truncate(&body, 120)
+        )));
+    }
+
     // Some OpenAI-compatible servers ignore `"stream": true` and answer with
     // a single JSON object. Treat that as a complete reply instead of
     // silently returning empty content.

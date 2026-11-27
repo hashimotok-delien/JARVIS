@@ -148,7 +148,7 @@ impl Default for ProviderSettings {
             gemini_base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
             ollama_model: "qwen2.5:7b-instruct".into(),
             ollama_base_url: "http://127.0.0.1:11434".into(),
-            opencode_base_url: "http://127.0.0.1:3000/v1".into(),
+            opencode_base_url: "http://127.0.0.1:3000".into(),
             opencode_model: "deepseek-v4.1-flash".into(),
             opencode_heavy_model: "deepseek-v4.1-pro".into(),
             auto_route: false,
@@ -534,6 +534,14 @@ impl Settings {
             self.providers.ollama_base_url.trim_end_matches('/').into();
         self.providers.opencode_base_url =
             self.providers.opencode_base_url.trim_end_matches('/').into();
+        // Older builds pointed at an OpenAI-compatible `/v1`; the native
+        // API lives at the server root.
+        let trimmed = self.providers.opencode_base_url.clone();
+        let normalized = trimmed
+            .strip_suffix("/v1")
+            .unwrap_or(&trimmed)
+            .to_string();
+        self.providers.opencode_base_url = normalized;
         if self.providers.opencode_base_url.trim().is_empty() {
             self.providers.opencode_base_url =
                 ProviderSettings::default().opencode_base_url;

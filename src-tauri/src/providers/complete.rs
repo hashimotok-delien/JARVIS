@@ -8,6 +8,11 @@ use crate::models::Settings;
 use crate::providers::{ProviderConfig, resolve_providers};
 
 async fn request(cfg: &ProviderConfig, system: &str, user: &str) -> Result<String, String> {
+    // `opencode web` only speaks its own API, not OpenAI-compatible routes.
+    if cfg.id == "opencode" {
+        return super::opencode::complete(cfg, system, user).await;
+    }
+
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(90))
@@ -43,6 +48,12 @@ async fn request(cfg: &ProviderConfig, system: &str, user: &str) -> Result<Strin
 
     if !status.is_success() {
         return Err(format!("{status} {}", excerpt(&body, 240)));
+    }
+
+    // `opencode web` and similar servers answer unknown routes with their
+    // SPA index page (HTTP 200 + HTML). Say so instead of "cannot parse".
+    if looks_like_html(&body) {
+        return Err(html_reply_hint(&cfg.base_url));
     }
 
     if let Ok(payload) = serde_json::from_str::<Value>(&body) {
@@ -85,6 +96,27 @@ fn excerpt(value: &str, max: usize) -> String {
     }
     let head: String = trimmed.chars().take(max).collect();
     format!("{head}…")
+}
+
+/// Servers such as `opencode web` answer unknown routes with their SPA index
+/// page, so a misconfigured base URL looks like a successful response.
+fn looks_like_html(body: &str) -> bool {
+    let head: String = body
+        .trim_start()
+        .chars()
+        .take(64)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    head.starts_with("<!doctype html") || head.starts_with("<html")
+}
+
+fn html_reply_hint(base_url: &str) -> String {
+    format!(
+        "サーバーがHTMLを返しました（{base_url}）。OpenAI 互換の \
+         /chat/completions ではありません。`opencode web` は /api/ 配下の \
+         独自APIのみ提供するため、OpenAI 互換ゲートウェイの URL を設定して\
+         ください。"
+    )
 }
 
 /// Stitch `data:` chunks together when a server ignores `stream: false`.

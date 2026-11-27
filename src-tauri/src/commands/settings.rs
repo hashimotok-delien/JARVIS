@@ -111,6 +111,24 @@ async fn probe(
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
+                let content_type = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                // A 200 with HTML means the URL is not an OpenAI-compatible
+                // endpoint (e.g. `opencode web` serving its SPA index).
+                if content_type.starts_with("text/html") {
+                    let detail =
+                        "HTML が返りました（OpenAI 互換エンドポイントではありません）";
+                    crate::log_message(
+                        "WARN",
+                        "provider",
+                        &format!("connection test returned HTML: {url}"),
+                    );
+                    return (false, detail.to_string());
+                }
                 (true, format!("OK ({status})"))
             } else {
                 let text = response.text().await.unwrap_or_default();
@@ -131,6 +149,43 @@ async fn probe(
             );
             (false, error.to_string())
         }
+    }
+}
+
+async fn probe_get(
+    client: &reqwest::Client,
+    url: &str,
+    key: Option<&str>,
+) -> (bool, String) {
+    let mut request = client.get(url);
+    if let Some(key) = key {
+        request = request.bearer_auth(key);
+    }
+
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                let detail: String = text.chars().take(160).collect();
+                return (false, format!("{status} {detail}"));
+            }
+            if content_type.starts_with("text/html") {
+                return (
+                    false,
+                    "HTML が返りました（opencode web のサーバー URL を設定してください）"
+                        .into(),
+                );
+            }
+            (true, format!("OK ({status})"))
+        }
+        Err(error) => (false, error.to_string()),
     }
 }
 
@@ -157,7 +212,7 @@ pub async fn test_providers(
     let gemini_url = format!("{}/chat/completions", settings.providers.gemini_base_url);
     let ollama_url = format!("{}/v1/chat/completions", settings.providers.ollama_base_url);
     let opencode_url = format!(
-        "{}/chat/completions",
+        "{}/api/info",
         settings.providers.opencode_base_url
     );
 
@@ -169,12 +224,7 @@ pub async fn test_providers(
             &settings.providers.gemini_model
         ),
         probe(&client, &ollama_url, None, &settings.providers.ollama_model),
-        probe(
-            &client,
-            &opencode_url,
-            opencode_key.as_deref(),
-            &settings.providers.opencode_model
-        )
+        probe_get(&client, &opencode_url, opencode_key.as_deref())
     );
 
     let _ = app;
@@ -200,11 +250,7 @@ pub async fn test_providers(
             id: "opencode".into(),
             label: "OpenCode".into(),
             ok: opencode.0,
-            detail: if opencode_key.is_none() {
-                "APIキー未設定".into()
-            } else {
-                opencode.1
-            },
+            detail: opencode.1,
         },
     ])
 }

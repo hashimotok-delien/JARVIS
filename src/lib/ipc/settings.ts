@@ -14,7 +14,7 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
       "https://generativelanguage.googleapis.com/v1beta/openai",
     ollamaModel: "qwen2.5:7b-instruct",
     ollamaBaseUrl: "http://127.0.0.1:11434",
-    opencodeBaseUrl: "http://127.0.0.1:3000/v1",
+    opencodeBaseUrl: "http://127.0.0.1:3000",
     opencodeModel: "deepseek-v4.1-flash",
     opencodeHeavyModel: "deepseek-v4.1-pro",
     autoRoute: false,

@@ -19,6 +19,42 @@ pub async fn run_stream(
     cancel: &AtomicBool,
     out: &mut String,
 ) -> Result<(), StreamFailure> {
+    // The OpenCode server exposes no OpenAI-compatible streaming API. Its
+    // stateless one-shot endpoint answers in full, so JARVIS tools are not
+    // available on this provider.
+    if provider.id == "opencode" {
+        crate::log_message(
+            "DEBUG",
+            "agent",
+            "opencode: /api/experimental/generate/text（ツールなし）",
+        );
+        let sink = &mut *out;
+        let app_handle = app.clone();
+        let request_id = ctx.request_id.clone();
+        let thread_id = ctx.thread_id.clone();
+        let message_id = ctx.message_id.clone();
+        crate::providers::opencode::stream(
+            provider,
+            &ctx.turns,
+            cancel,
+            move |delta| {
+                sink.push_str(delta);
+                events::emit(
+                    &app_handle,
+                    events::CHAT_DELTA,
+                    ChatDelta {
+                        request_id: request_id.clone(),
+                        thread_id: thread_id.clone(),
+                        message_id: message_id.clone(),
+                        delta: delta.to_string(),
+                    },
+                );
+            },
+        )
+        .await?;
+        return Ok(());
+    }
+
     let mut messages: Vec<Value> = ctx.turns.iter().map(|turn| turn.to_value()).collect();
     let definitions = crate::tools::definitions(settings).await;
     let tools = if definitions.is_empty() {
