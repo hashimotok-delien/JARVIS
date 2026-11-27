@@ -10,6 +10,8 @@ J.A.R.V.I.S. の注目に値する変更点を、リリースごとに時系列�
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-28
+
 ### Changed
 
 - OpenCode プロバイダを `opencode web` のネイティブ API

@@ -1,7 +1,7 @@
 {
-  "version": "0.5.2",
-  "releasedAt": "2026-11-27",
-  "notes": "HUDテーマ、HUDダッシュボード、静止モード、パネルON/OFF、HUDの固定・サイズ変更・透明度、天気地点の検索、起動語の表記揺れ対応、音声でのツール承認、VADのノイズ耐性を追加・修正",
-  "installer": "JARVIS_0.5.2_x64-setup.exe",
+  "version": "0.5.3",
+  "releasedAt": "2026-11-28",
+  "notes": "OpenCodeをネイティブAPI（/api/experimental/generate/text）に接続、HUDのサイズ変更が効かない問題と、音声入力で物音の書き起こしや1文字の誤認識を発話として送ってしまう問題を修正、接続テストの誤判定を修正",
+  "installer": "JARVIS_0.5.3_x64-setup.exe",
   "url": ""
 }
